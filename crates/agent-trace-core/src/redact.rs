@@ -103,7 +103,9 @@ fn patterns() -> &'static [Pattern] {
             p("slack_token", r"\bxox[abprs]-[A-Za-z0-9-]{10,}", 0),
             p(
                 "url_credentials",
-                r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]*:([^@\s/]+)@",
+                // Greedy up to the *last* '@' of the authority: drivers split there, so a
+                // password with an unencoded '@' must be covered completely.
+                r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]*:([^\s/]+)@",
                 1,
             ),
             p(
@@ -113,7 +115,8 @@ fn patterns() -> &'static [Pattern] {
             ),
             p(
                 "assignment",
-                r#"(?i)\b[A-Z0-9_.-]*(?:api[_-]?key|token|secret|passw(?:or)?d|pwd|credential)[A-Z0-9_.-]*\s*[:=]\s*"?([^\s"',;]{4,})"#,
+                // The key may be quoted (JSON text, `KEY='v'`), and so may the value.
+                r#"(?i)\b[A-Z0-9_.-]*(?:api[_-]?key|token|secret|passw(?:or)?d|pwd|credential)[A-Z0-9_.-]*["']?\s*[:=]\s*["']?([^\s"',;]{4,})"#,
                 1,
             ),
         ]
@@ -128,6 +131,82 @@ fn sensitive_key() -> &'static Regex {
         )
         .expect("valid key regex")
     })
+}
+
+/// Words that mark a key as holding a secret when they appear as one of its segments
+/// (`db_password`, `aws_secret_access_key`, `x-auth-token`, `githubToken`).
+const SECRET_KEY_WORDS: &[&str] = &[
+    "password",
+    "passwd",
+    "passphrase",
+    "pwd",
+    "secret",
+    "token",
+    "apikey",
+    "credential",
+    "credentials",
+    "cookie",
+    "authorization",
+];
+/// Adjacent segment pairs with the same meaning (`api_key`, `private-key`, `access_key`).
+const SECRET_KEY_PAIRS: &[(&str, &str)] = &[
+    ("api", "key"),
+    ("private", "key"),
+    ("access", "key"),
+    ("session", "id"),
+];
+
+/// Split a key into lowercase segments at punctuation and camelCase boundaries.
+fn key_segments(key: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut prev_lower = false;
+    for c in key.chars() {
+        if !c.is_ascii_alphanumeric() {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            prev_lower = false;
+            continue;
+        }
+        if c.is_ascii_uppercase() && prev_lower && !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
+        }
+        prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
+        cur.push(c.to_ascii_lowercase());
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Whether a key names a secret by one of its segments. Counters such as `max_tokens` or
+/// `token_count` only match when their value is a string (see `redact_inner`).
+fn secret_key_by_segment(key: &str) -> bool {
+    let segs = key_segments(key);
+    segs.iter().any(|s| SECRET_KEY_WORDS.contains(&s.as_str()))
+        || segs
+            .windows(2)
+            .any(|w| SECRET_KEY_PAIRS.contains(&(w[0].as_str(), w[1].as_str())))
+}
+
+/// Whether `value` is one of our placeholders (`[REDACTED:<label>]`), optionally followed by
+/// punctuation picked up by a pattern. A value that only *starts* with the prefix, or that
+/// carries more text after the placeholder, is redacted like any other.
+fn is_placeholder(value: &str) -> bool {
+    let Some(rest) = value
+        .strip_prefix(REDACTED_PREFIX)
+        .and_then(|rest| rest.strip_prefix(':'))
+    else {
+        return false;
+    };
+    let Some((label, tail)) = rest.split_once(']') else {
+        return false;
+    };
+    !label.is_empty()
+        && label.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+        && !tail.chars().any(char::is_alphanumeric)
 }
 
 /// Redacts secrets and enforces size limits.
@@ -150,8 +229,7 @@ impl Redactor {
                 let Some(value) = caps.get(pattern.value_group) else {
                     return whole.as_str().to_owned();
                 };
-                if value.as_str().starts_with(REDACTED_PREFIX) || !(pattern.accept)(value.as_str())
-                {
+                if is_placeholder(value.as_str()) || !(pattern.accept)(value.as_str()) {
                     return whole.as_str().to_owned();
                 }
                 report.redactions += 1;
@@ -210,15 +288,25 @@ impl Redactor {
             Value::Object(map) => {
                 let mut out = Map::new();
                 for (key, v) in map {
-                    let is_secret_key = sensitive_key().is_match(key);
-                    let already = v.as_str().is_some_and(|s| s.starts_with(REDACTED_PREFIX));
+                    let is_secret_key = sensitive_key().is_match(key)
+                        || (v.is_string() && secret_key_by_segment(key));
+                    let already = v.as_str().is_some_and(is_placeholder);
                     let new_value = if is_secret_key && !v.is_null() && !already {
                         report.redactions += 1;
                         Value::String(format!("{REDACTED_PREFIX}:field]"))
                     } else {
                         self.redact_inner(v, report)
                     };
-                    out.insert(key.clone(), new_value);
+                    // Keys are content too: a token used as a key must not survive.
+                    let (redacted_key, key_report) = self.redact_str(key);
+                    report.merge(key_report);
+                    let mut new_key = redacted_key.clone();
+                    let mut n = 1;
+                    while out.contains_key(&new_key) {
+                        n += 1;
+                        new_key = format!("{redacted_key}#{n}");
+                    }
+                    out.insert(new_key, new_value);
                 }
                 Value::Object(out)
             }

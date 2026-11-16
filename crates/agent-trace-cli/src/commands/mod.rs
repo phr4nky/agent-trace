@@ -100,7 +100,10 @@ pub fn explore(
         findings = analyze_and_store(&mut store, &record)?;
     }
     match snapshot {
-        Some((keys, size)) => print!("{}", crate::tui::snapshot(record, findings, keys, size)?),
+        Some((keys, size)) => print!(
+            "{}",
+            crate::output::term_safe_lines(&crate::tui::snapshot(record, findings, keys, size)?)
+        ),
         None => {
             let follow = follow.then_some(crate::tui::Follow {
                 store: &mut store,
@@ -110,4 +113,28 @@ pub fn explore(
         }
     }
     Ok(EXIT_OK)
+}
+
+/// Exit code for `--fail-on`: [`crate::EXIT_FINDINGS`] if any finding reaches the threshold.
+pub fn threshold_exit(
+    findings: &[agent_trace_core::Finding],
+    fail_on: Option<crate::Threshold>,
+) -> u8 {
+    use agent_trace_core::Severity;
+    let threshold = fail_on.map(|t| match t {
+        crate::Threshold::Low => Severity::Low,
+        crate::Threshold::Medium => Severity::Medium,
+        crate::Threshold::High => Severity::High,
+        crate::Threshold::Critical => Severity::Critical,
+    });
+    match (threshold, crate::output::max_severity(findings)) {
+        (Some(t), Some(max)) if max >= t => {
+            eprintln!(
+                "findings at or above {t} — exit code {}",
+                crate::EXIT_FINDINGS
+            );
+            crate::EXIT_FINDINGS
+        }
+        _ => crate::EXIT_OK,
+    }
 }

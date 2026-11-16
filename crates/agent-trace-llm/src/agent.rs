@@ -390,6 +390,9 @@ fn agent_loop<'a>(
                                 context: Vec::new(),
                                 simulated: false,
                                 extra_meta: extra,
+                                offered_tools: Some(
+                                    role.tools.iter().map(|t| t.name.clone()).collect(),
+                                ),
                             };
                             let outcome = gated_tool_call(
                                 ctx.session,

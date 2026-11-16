@@ -20,9 +20,13 @@ no context links, status = `completed`).
 | `trust_level` | `trusted` `lower_trust` `unknown` | |
 | `name` | string | tool / agent / operation name |
 | `payload` | object | **redacted**, string values ≤ 16 KiB, payload ≤ 256 KiB (else truncated with marker) |
+
+When a payload is truncated, the content rules scan the original first and store the matching
+indicator labels in `metadata.content_indicators` (`{"AT-001": [...], "AT-005": [...]}`), so text
+beyond the size limits is still analyzed. Only labels from the built-in indicator lists are honored.
 | `execution_mode` | `simulated` `live` | |
 | `tool_state` | `requested` `policy_decision` `blocked` `executed` `completed` `failed` (optional) | |
-| `metadata` | object | e.g. `transport`, `mcp_server`, `redactions`, `truncated`, `simulated_decision`, `mock_tool`, `tool_use_id` |
+| `metadata` | object | e.g. `transport`, `mcp_server`, `redactions`, `truncated`, `content_indicators`, `simulated_decision`, `mock_tool`, `tool_use_id` |
 | `agent_id` | string (optional, 1.1) | acting agent; absent = `main` |
 | `context_event_ids` | UUID[] (optional, 1.1) | additional explicit causes: everything that was in the context of this event (e.g. all tool results a `model_request` was based on). Must reference earlier events |
 

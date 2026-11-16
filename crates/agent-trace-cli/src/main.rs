@@ -106,6 +106,10 @@ enum Command {
         format: ImportFormat,
         #[arg(long, value_name = "PATH")]
         input: PathBuf,
+        /// Exit with code 2 if a finding of this import has at least this severity
+        /// (decided on the validated file, not on a later read of the database).
+        #[arg(long, value_enum)]
+        fail_on: Option<Threshold>,
     },
     /// Internal: run the local lab MCP server on stdio.
     #[command(hide = true)]
@@ -149,6 +153,9 @@ enum DemoCommand {
         /// Pause between agent steps in milliseconds (default with --live: 800).
         #[arg(long, value_name = "MS")]
         step_delay_ms: Option<u64>,
+        /// Exit with code 2 if a finding of this run has at least this severity.
+        #[arg(long, value_enum)]
+        fail_on: Option<Threshold>,
     },
 }
 
@@ -234,6 +241,7 @@ fn main() -> ExitCode {
                         max_turns,
                         live,
                         step_delay_ms,
+                        fail_on,
                     },
             } => commands::demo::run(
                 &ctx,
@@ -248,6 +256,7 @@ fn main() -> ExitCode {
                     step_delay: std::time::Duration::from_millis(
                         step_delay_ms.unwrap_or(if live { 800 } else { 0 }),
                     ),
+                    fail_on,
                 },
             ),
             Command::Trace {
@@ -274,13 +283,20 @@ fn main() -> ExitCode {
                 format,
                 output,
             } => commands::export::run(&ctx, &target, format, output.as_deref()),
-            Command::Import { format, input } => commands::import::run(&ctx, format, &input),
+            Command::Import {
+                format,
+                input,
+                fail_on,
+            } => commands::import::run(&ctx, format, &input, fail_on),
         };
     match result {
         Ok(code) => ExitCode::from(code),
         Err(err) => {
             let redactor = agent_trace_core::Redactor::new();
-            eprintln!("error: {}", redactor.scrub(&format!("{err:#}")));
+            eprintln!(
+                "error: {}",
+                output::term_safe(&redactor.scrub(&format!("{err:#}")))
+            );
             ExitCode::from(EXIT_ERROR)
         }
     }

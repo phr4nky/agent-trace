@@ -10,8 +10,8 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use agent_trace_core::{
-    Decision, EventKind, EventSpec, ExecutionMode, Origin, ToolPolicy, ToolState, TraceRecord,
-    TraceRecorder, TraceStatus, TrustLevel,
+    Decision, EventKind, EventSpec, ExecutionMode, Origin, PolicyOutcome, ToolPolicy, ToolState,
+    TraceRecord, TraceRecorder, TraceStatus, TrustLevel,
 };
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
@@ -304,6 +304,7 @@ fn drive_steps<'a>(
                         context: Vec::new(),
                         simulated: true,
                         extra_meta: Map::new(),
+                        offered_tools: None,
                     };
                     gated_tool_call(run.session, &run.options.policy, rec, gate, tool, arguments)
                         .await?
@@ -507,6 +508,9 @@ pub struct GateRequest {
     pub simulated: bool,
     /// Extra metadata on the request event (e.g. `tool_use_id`).
     pub extra_meta: Map<String, Value>,
+    /// Tools offered to this agent. A request for any other tool is recorded and denied.
+    /// `None` = no per-agent restriction (the scripted agent).
+    pub offered_tools: Option<Vec<String>>,
 }
 
 /// Outcome of a gated tool call.
@@ -551,7 +555,13 @@ pub async fn gated_tool_call(
         spec = simulated(spec);
     }
     let request = rec.record(spec);
-    let outcome = policy.evaluate(tool, arguments);
+    let outcome = match &gate.offered_tools {
+        Some(offered) if !offered.iter().any(|t| t == tool) => PolicyOutcome {
+            decision: Decision::Deny,
+            reason: format!("tool {tool:?} was not offered to this agent"),
+        },
+        _ => policy.evaluate(tool, arguments),
+    };
     let denied = outcome.decision == Decision::Deny;
     let decision = rec.record(
         EventSpec::new(

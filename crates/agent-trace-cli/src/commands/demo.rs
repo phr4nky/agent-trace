@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -10,13 +9,13 @@ use agent_trace_mcp::{
     run_scenario_with,
 };
 use agent_trace_storage::{
-    LiveWriter, StorageError, TraceSource, restrict_file, write_json_report, write_jsonl,
+    LiveWriter, StorageError, TraceSource, create_private_file, write_json_report, write_jsonl,
 };
 use anyhow::Context as _;
 
-use super::{Context, analyze_and_store};
+use super::{Context, analyze_and_store, threshold_exit};
 use crate::output::{finding_line, short};
-use crate::{EXIT_OK, ProviderArg, ScenarioArg};
+use crate::{ProviderArg, ScenarioArg, Threshold};
 
 pub struct DemoArgs {
     pub scenario: ScenarioArg,
@@ -27,6 +26,7 @@ pub struct DemoArgs {
     pub base_url: Option<String>,
     pub max_turns: usize,
     pub step_delay: Duration,
+    pub fail_on: Option<Threshold>,
 }
 
 pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
@@ -147,6 +147,7 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
 
     let mut failures = 0;
     let mut last_id = None;
+    let mut all_findings = Vec::new();
     for (name, title, result) in produced {
         let record = match result {
             Ok(r) => r,
@@ -160,27 +161,26 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
                 );
                 println!(
                     "  error    : {}\n",
-                    agent_trace_core::Redactor::new().scrub(&e)
+                    crate::output::term_safe(&agent_trace_core::Redactor::new().scrub(&e))
                 );
                 continue;
             }
         };
         let findings = analyze_and_store(&mut store, &record)?;
+        all_findings.extend(findings.iter().cloned());
         let base = format!("{name}-{}", record.trace.trace_id);
         let jsonl_path = exports.join(format!("{base}.jsonl"));
         let report_path = exports.join(format!("{base}.findings.json"));
         write_jsonl(
-            BufWriter::new(File::create(&jsonl_path)?),
+            BufWriter::new(create_private_file(&jsonl_path)?),
             &record,
             &findings,
         )?;
         write_json_report(
-            BufWriter::new(File::create(&report_path)?),
+            BufWriter::new(create_private_file(&report_path)?),
             &record,
             &findings,
         )?;
-        restrict_file(&jsonl_path)?;
-        restrict_file(&report_path)?;
 
         let agents = agent_trace_core::Trace::agents(&record.events);
         println!(
@@ -247,7 +247,7 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
             "{failures} scenario(s) aborted; their partial traces are stored with status `aborted`"
         );
     }
-    Ok(EXIT_OK)
+    Ok(threshold_exit(&all_findings, args.fail_on))
 }
 
 fn meta(record: &TraceRecord, key: &str) -> String {

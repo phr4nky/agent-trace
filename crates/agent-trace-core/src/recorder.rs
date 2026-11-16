@@ -152,6 +152,7 @@ impl TraceRecorder {
         created_at: OffsetDateTime,
         deterministic: bool,
     ) -> Self {
+        let name = Redactor::new().scrub(&name);
         let mut metadata = Map::new();
         metadata.insert("deterministic".into(), Value::Bool(deterministic));
         Self {
@@ -225,6 +226,10 @@ impl TraceRecorder {
         }
         if report.truncated || meta_report.truncated {
             metadata.insert("truncated".into(), Value::Bool(true));
+        }
+        if report.truncated {
+            // The stored payload is cut; let the content rules see what the agent saw.
+            crate::rules::record_content_indicators(&mut metadata, &spec.payload);
         }
         // Only keep links to events that exist in this trace (never invent causality).
         let known = |id: &Uuid| self.events.iter().any(|e| e.event_id == *id);

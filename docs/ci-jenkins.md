@@ -98,10 +98,11 @@ and you can no longer tell *findings* (2) from a *broken setup* (1).
 
 For every `traces/*.jsonl`:
 
-1. `agent-trace import`: validates the file, redacts it again and computes findings locally.
-   Findings stored in the file are ignored.
+1. `agent-trace import --fail-on <threshold>`: validates the file, redacts it again, computes
+   findings locally and writes them to `reports/<name>.txt` and the console. Findings stored in the
+   file are ignored. The exit code is decided on this validated import, so another writer of a
+   shared database cannot change the verdict.
 2. `agent-trace export <id> --format jsonl`: writes the redacted trace to `reports/<name>.jsonl`.
-3. `agent-trace analyze <id> --fail-on <threshold>`: writes the findings to `reports/<name>.txt` and the console.
 
 It addresses each trace by the ID that `import` prints, not by `--latest`, so parallel builds on a
 shared database cannot mix up traces.
@@ -175,11 +176,22 @@ By default, each build uses its own SQLite store, and the pipeline deletes it in
 To compare findings across builds, point all builds at PostgreSQL or MariaDB/MySQL instead.
 TLS is enabled automatically for non-loopback hosts.
 
+Bind the credential only around the gate stage, not in the pipeline-wide `environment`. Otherwise
+the agent tests, which run code from the change being built, can read the database password:
+
 ```groovy
-environment {
-    AGENT_TRACE_DATABASE_URL = credentials('agent-trace-db-url')   // Secret text
+stage('agent-trace gate') {
+    when { not { changeRequest() } }   // untrusted pull requests use the per-build SQLite store
+    steps {
+        withCredentials([string(credentialsId: 'agent-trace-db-url', variable: 'AGENT_TRACE_DATABASE_URL')]) {
+            sh 'sh "$AGENT_TRACE_HOME/examples/ci/agent-trace-gate.sh" traces reports "$FAIL_ON"'
+        }
+    }
 }
 ```
+
+Add a second gate stage with `when { changeRequest() }` and no credential, so pull requests are
+still checked.
 
 The secret should be a full URL, for example
 `postgres://agent_trace:…@db.internal:5432/agent_trace?sslmode=require`. agent-trace redacts the
@@ -202,6 +214,9 @@ new model version or a changed prompt makes the agent easier to manipulate.
    reads the key from the environment only and never stores it in a trace.
 
 Model output is not deterministic, so treat this as a trend signal. Do not use it as a merge blocker.
+
+The stage is skipped for pull requests (`not { changeRequest() }`): their code runs earlier in the
+same workspace and could replace the binary or scripts this stage runs while the key is set.
 
 ### Multibranch and pull requests
 

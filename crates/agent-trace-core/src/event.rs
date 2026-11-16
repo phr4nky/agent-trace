@@ -243,10 +243,16 @@ impl Event {
 
     /// Concatenated textual payload content, used by content rules.
     pub fn payload_text(&self) -> String {
-        let mut out = String::new();
-        collect_strings(&self.payload, &mut out);
-        out
+        value_text(&self.payload)
     }
+}
+
+/// All strings of a JSON value, object keys included, one per line. Keys count as content:
+/// structured tool results can carry instructions in their keys as well as in their values.
+pub fn value_text(value: &Value) -> String {
+    let mut out = String::new();
+    collect_strings(value, &mut out);
+    out
 }
 
 fn collect_strings(value: &Value, out: &mut String) {
@@ -256,7 +262,11 @@ fn collect_strings(value: &Value, out: &mut String) {
             out.push('\n');
         }
         Value::Array(items) => items.iter().for_each(|v| collect_strings(v, out)),
-        Value::Object(map) => map.values().for_each(|v| collect_strings(v, out)),
+        Value::Object(map) => map.iter().for_each(|(k, v)| {
+            out.push_str(k);
+            out.push('\n');
+            collect_strings(v, out);
+        }),
         _ => {}
     }
 }

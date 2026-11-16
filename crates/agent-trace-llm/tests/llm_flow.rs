@@ -365,3 +365,143 @@ fn config_requires_key_and_hides_it() {
     assert!(!format!("{cfg:?}").contains(FAKE_KEY));
     assert_eq!(cfg.describe(), "openai/m @ localhost");
 }
+
+/// Raw HTTP server: answers every request with `reply` and records request heads.
+async fn raw_server(reply: Vec<u8>) -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let heads = Arc::new(Mutex::new(Vec::new()));
+    let log = heads.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buf = vec![0u8; 65536];
+            let n = sock.read(&mut buf).await.unwrap_or(0);
+            log.lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&buf[..n]).into_owned());
+            let _ = sock.write_all(&reply).await;
+            let _ = sock.shutdown().await;
+        }
+    });
+    (format!("http://{addr}"), heads)
+}
+
+fn request_for_test() -> (
+    Vec<agent_trace_llm::types::Message>,
+    Vec<agent_trace_llm::types::ToolDef>,
+) {
+    (Vec::new(), Vec::new())
+}
+
+async fn call(
+    client: &LlmClient,
+) -> Result<agent_trace_llm::types::ModelReply, agent_trace_llm::LlmError> {
+    let (messages, tools) = request_for_test();
+    client
+        .complete(&agent_trace_llm::types::ModelRequest {
+            system: "s",
+            messages: &messages,
+            tools: &tools,
+            max_tokens: 16,
+        })
+        .await
+}
+
+// Regression: a redirect from the endpoint was followed and reqwest kept the custom
+// `x-api-key` header on cross-host redirects, sending the key to the redirect target.
+#[tokio::test]
+async fn api_key_is_never_sent_to_a_redirect_target() {
+    let (target, target_heads) =
+        raw_server(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}".to_vec()).await;
+    // Same loopback IP, different port: a different origin for the client.
+    let redirect = format!(
+        "HTTP/1.1 307 Temporary Redirect\r\nLocation: {target}/v1/messages\r\nContent-Length: 0\r\n\r\n"
+    );
+    let (base, _) = raw_server(redirect.into_bytes()).await;
+    let client = client(ProviderKind::Anthropic, base);
+    assert!(call(&client).await.is_err());
+    assert!(
+        target_heads.lock().unwrap().is_empty(),
+        "redirect was followed"
+    );
+}
+
+// Regression: the response body was read without a size limit.
+#[tokio::test]
+async fn oversized_responses_are_rejected() {
+    let size = 20 * 1024 * 1024;
+    let mut reply =
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
+            .to_string()
+            .into_bytes();
+    reply.extend(std::iter::repeat_n(b' ', size));
+    let (base, _) = raw_server(reply).await;
+    let client = client(ProviderKind::OpenAi, base);
+    let err = call(&client).await.unwrap_err().to_string();
+    assert!(err.contains("too large"), "{err}");
+}
+
+// A key must not go over plaintext HTTP to a non-loopback host.
+#[test]
+fn api_key_requires_https_for_remote_hosts() {
+    let cfg = |base: &str| ProviderConfig {
+        kind: ProviderKind::OpenAi,
+        model: "m".into(),
+        base_url: base.into(),
+        api_key: Some(FAKE_KEY.into()),
+        timeout: Duration::from_secs(5),
+    };
+    let err = LlmClient::new(cfg("http://ollama.example:11434/v1"))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("https"), "{err}");
+    assert!(LlmClient::new(cfg("http://127.0.0.1:11434/v1")).is_ok());
+    assert!(LlmClient::new(cfg("https://llm.example/v1")).is_ok());
+    let mut keyless = cfg("http://ollama.example:11434/v1");
+    keyless.api_key = None;
+    assert!(LlmClient::new(keyless).is_ok());
+}
+
+// Regression: a model could call any MCP tool, also ones never offered to its role (the
+// researcher only gets read_document). Such calls are now recorded and denied by the gate.
+#[tokio::test]
+async fn tools_not_offered_to_a_role_are_denied() {
+    let (url, _captured) = fake_provider(vec![
+        anthropic_tool_use(
+            "o1",
+            "delegate_to_researcher",
+            json!({"task": "Summarize benign-readme.md."}),
+        ),
+        // researcher tries a privileged tool it was not offered
+        anthropic_tool_use("r1", "run_command_mock", json!({"command": "echo MARKER"})),
+        anthropic_text("Could not run it."),
+        anthropic_text("Done."),
+    ])
+    .await;
+    let scenario = lab().load_scenario("multi-agent-handoff").unwrap();
+    let session = session().await;
+    let record = run_llm_scenario(
+        lab_recorder(&scenario, ExecutionMode::Live, false),
+        &scenario,
+        &session,
+        &client(ProviderKind::Anthropic, url),
+        &LlmRunOptions::default(),
+    )
+    .await
+    .unwrap();
+    let denied = record
+        .events
+        .iter()
+        .find(|e| e.kind == EventKind::ToolPolicyDecision && e.name == "run_command_mock")
+        .expect("policy decision recorded");
+    assert_eq!(denied.payload["decision"], "deny", "{}", denied.payload);
+    assert!(
+        !record
+            .events
+            .iter()
+            .any(|e| e.kind == EventKind::ToolCallExecuted && e.name == "run_command_mock")
+    );
+}

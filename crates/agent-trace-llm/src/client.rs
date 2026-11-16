@@ -9,6 +9,23 @@ use serde_json::Value;
 use crate::types::{ModelReply, ModelRequest};
 use crate::{LlmError, anthropic, openai};
 
+/// Maximum size of a provider response body.
+pub const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Whether `base_url` may receive an API key: https, or plain http to a loopback host only.
+fn key_transport_ok(base_url: &str) -> bool {
+    let lower = base_url.trim().to_ascii_lowercase();
+    if lower.starts_with("https://") {
+        return true;
+    }
+    let host = agent_trace_core::policy::host_of(&lower).unwrap_or_default();
+    lower.starts_with("http://")
+        && (host == "localhost"
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|a| a.is_loopback()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
     Anthropic,
@@ -116,9 +133,19 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn new(config: ProviderConfig) -> Result<Self, LlmError> {
+        if config.api_key.is_some() && !key_transport_ok(&config.base_url) {
+            return Err(LlmError::Config(format!(
+                "refusing to send the {} API key to {}: use an https:// base URL \
+                 (plain http is only allowed for localhost), or unset the key",
+                config.kind.name(),
+                Redactor::new().scrub(&config.base_url)
+            )));
+        }
         let _ = rustls::crypto::ring::default_provider().install_default();
         let http = reqwest::Client::builder()
             .timeout(config.timeout)
+            // Never follow redirects: the key header would be replayed to the new location.
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("agent-trace/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| LlmError::Http(e.to_string()))?;
@@ -159,10 +186,7 @@ impl LlmClient {
             .await
             .map_err(|e| LlmError::Http(scrub(&e.to_string())))?;
         let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| LlmError::Http(scrub(&e.to_string())))?;
+        let text = read_limited(response, cfg.kind).await?;
         let json: Value = serde_json::from_str(&text).map_err(|_| {
             LlmError::Parse(format!(
                 "{} returned non-JSON (HTTP {status}): {}",
@@ -186,6 +210,37 @@ impl LlmClient {
             ProviderKind::OpenAi => openai::parse_reply(&json),
         }
     }
+}
+
+/// Read the body up to [`MAX_RESPONSE_BYTES`]; larger bodies are an error.
+async fn read_limited(
+    mut response: reqwest::Response,
+    kind: ProviderKind,
+) -> Result<String, LlmError> {
+    let too_large = || {
+        LlmError::Http(format!(
+            "{} response too large (limit {MAX_RESPONSE_BYTES} bytes)",
+            kind.name()
+        ))
+    };
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_RESPONSE_BYTES as u64)
+    {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| LlmError::Http(scrub(&e.to_string())))?
+    {
+        if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 fn scrub(s: &str) -> String {

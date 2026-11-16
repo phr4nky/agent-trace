@@ -18,18 +18,19 @@ impl Rule for TrustBoundaryRule {
         "AT-002"
     }
     fn version(&self) -> u32 {
-        2
+        3
     }
     fn title(&self) -> &'static str {
         "Privileged tool request caused by lower-trust content"
     }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         let mut out = Vec::new();
+        let causes = ctx
+            .index
+            .nearest_causes(|e| e.trust_level == TrustLevel::LowerTrust);
         for request in privileged_requests(ctx) {
             let tool = tool_name(request);
-            let Some(path) = ctx.index.cause_path(request.event_id, |e| {
-                e.trust_level == TrustLevel::LowerTrust
-            }) else {
+            let Some(path) = causes.path(request.event_id, None) else {
                 continue;
             };
             let source = path[0];
@@ -71,22 +72,21 @@ impl Rule for CrossAgentTaintRule {
         "AT-006"
     }
     fn version(&self) -> u32 {
-        1
+        2
     }
     fn title(&self) -> &'static str {
         "Untrusted content crossed an agent boundary into a privileged action"
     }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         let mut out = Vec::new();
+        // Trace back to the *original* untrusted content (a tool result, document or model
+        // output) observed by another agent, not just the relayed message.
+        let causes = ctx.index.nearest_causes(|e| {
+            e.trust_level == TrustLevel::LowerTrust && e.kind.carries_content()
+        });
         for request in privileged_requests(ctx) {
             let agent = request.agent();
-            // Trace back to the *original* untrusted content (a tool result, document or model
-            // output) observed by another agent, not just the relayed message.
-            let Some(path) = ctx.index.cause_path(request.event_id, |e| {
-                e.trust_level == TrustLevel::LowerTrust
-                    && e.agent() != agent
-                    && e.kind.carries_content()
-            }) else {
+            let Some(path) = causes.path(request.event_id, Some(agent)) else {
                 continue;
             };
             let source = path[0];

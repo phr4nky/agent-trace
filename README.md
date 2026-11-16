@@ -258,6 +258,9 @@ stored, logged or written to a trace, and error messages are redacted.
 | Endpoint | `--base-url` or `ANTHROPIC_BASE_URL` | `--base-url` or `OPENAI_BASE_URL` (default `https://api.openai.com/v1`) |
 | Turn limit | `--max-turns` (default 8) | same |
 
+An API key is only sent over `https://`, or over plain `http://` to localhost. Redirects from
+the endpoint are not followed, and responses larger than 16 MiB are rejected.
+
 ---
 
 ## How it works
@@ -362,8 +365,8 @@ agent-trace demo run     # all commands now use that database
 
 - **Schema is created and upgraded automatically.** Migrations run on connect and are tracked in `schema_migrations`. Use a dedicated database and a user allowed to create and alter tables. A database with an incompatible schema is rejected with a clear message.
 - **TLS is required by default for non-local hosts.** It uses rustls with Mozilla root certificates.
-  - PostgreSQL: if the URL has no `sslmode`, `sslmode=require` is added for non-loopback hosts. Opt out with `?sslmode=disable`.
-  - MySQL/MariaDB: `?ssl-mode=required|disabled`. The default is `required` for non-loopback hosts.
+  - PostgreSQL: `sslmode=require` is enforced unless every host the driver connects to (including `host=`/`hostaddr=` parameters and host lists) is loopback or a Unix socket; the driver default `prefer` is upgraded. Opt out with `?sslmode=disable`.
+  - MySQL/MariaDB: `?ssl-mode=required|disabled`. The default is `required` unless the driver connects through a socket or to a loopback address (after any `?host=` override).
 - **Credentials:** prefer the environment variable over `--database-url`, so the password does not end up in your shell history. Passwords in URLs are always shown as `[REDACTED…]` in output and errors.
 - Only **redacted** data is ever written to any backend.
 
@@ -371,8 +374,10 @@ agent-trace demo run     # all commands now use that database
 
 ## Using agent-trace in CI
 
-The analyze command's exit code turns findings into a pass/fail signal:
-**`agent-trace analyze … --fail-on high` exits with `2`** if a high or critical finding exists.
+The exit code turns findings into a pass/fail signal:
+**`agent-trace import --input … --fail-on high`** (and `analyze … --fail-on high`) **exits with `2`**
+if a high or critical finding exists. In CI, take the verdict from `import --fail-on`: it is decided
+on the validated file, so neither parallel jobs nor other writers of a shared database can change it.
 
 Typical setup: your agent's integration tests write traces as JSONL (see
 [Recording your own agent](#recording-your-own-agent)). agent-trace then imports them, analyzes them,
@@ -403,9 +408,14 @@ jobs:
           mkdir -p reports
           status=0
           for f in traces/*.jsonl; do
-            agent-trace --no-color import --input "$f"
-            agent-trace --no-color export --latest --format json --output "reports/$(basename "$f" .jsonl).json"
-            agent-trace --no-color analyze --latest --fail-on high || status=$?
+            name=$(basename "$f" .jsonl)
+            # The verdict comes from the validated import; the evidence is exported by its id.
+            code=0
+            agent-trace --no-color import --input "$f" --fail-on high > "reports/$name.txt" || code=$?
+            cat "reports/$name.txt"
+            [ "$code" -eq 0 ] || [ "$status" -eq 1 ] || status=$code
+            id=$(sed -n 's/^imported trace \([0-9a-f-]*\).*/\1/p' "reports/$name.txt")
+            [ -z "$id" ] || agent-trace --no-color export "$id" --format json --output "reports/$name.json"
           done
           exit $status
 
@@ -429,9 +439,13 @@ agent-trace:
     - |
       status=0
       for f in traces/*.jsonl; do
-        agent-trace --no-color import --input "$f"
-        agent-trace --no-color export --latest --format json --output "reports/$(basename "$f" .jsonl).json"
-        agent-trace --no-color analyze --latest --fail-on high || status=$?
+        name=$(basename "$f" .jsonl)
+        code=0
+        agent-trace --no-color import --input "$f" --fail-on high > "reports/$name.txt" || code=$?
+        cat "reports/$name.txt"
+        [ "$code" -eq 0 ] || [ "$status" -eq 1 ] || status=$code
+        id=$(sed -n 's/^imported trace \([0-9a-f-]*\).*/\1/p' "reports/$name.txt")
+        [ -z "$id" ] || agent-trace --no-color export "$id" --format json --output "reports/$name.json"
       done
       exit $status
   artifacts:
@@ -469,11 +483,13 @@ With a provider key stored as a CI secret, you can check how a model handles the
 on every change to your prompts or model version:
 
 ```bash
-agent-trace --no-color demo run --provider anthropic --scenario exfil-attempt
-agent-trace --no-color analyze --latest --fail-on high   # fails if the model tried the exfiltration
+# exits with 2 if the model tried the exfiltration
+agent-trace --no-color demo run --provider anthropic --scenario exfil-attempt --fail-on high
 ```
 
-Model output is not deterministic, so treat this as a signal, not a unit test.
+Model output is not deterministic, so treat this as a signal, not a unit test. Run it only in
+builds of trusted branches: a job that holds a provider key must not run code from untrusted pull
+requests first.
 
 ### Try the CI flow locally
 
@@ -492,7 +508,7 @@ agent-trace --data-dir /tmp/ci-demo analyze --latest --fail-on high; echo "exit 
 **Tips**
 
 - Choose the threshold deliberately. `--fail-on high` catches trust-boundary crossings and exfiltration attempts, while `--fail-on medium` also fails on suspicious content alone.
-- Use a fresh `AGENT_TRACE_DATA_DIR` per job, or a shared PostgreSQL/MySQL database to keep history across runs.
+- Use a fresh `AGENT_TRACE_DATA_DIR` per job, or a shared PostgreSQL/MySQL database to keep history across runs. With a shared database, never use `--latest` in CI (another job may have stored a newer trace); use `import --fail-on` and the id that `import` prints.
 - Imported traces are treated as **untrusted input**. They are validated and re-redacted, and findings are always recomputed, never taken from the file.
 
 ---

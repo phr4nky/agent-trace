@@ -12,7 +12,7 @@ integrity of evidence.
 | Hostile MCP server results / prompt injection in documents | Results are labelled `lower_trust` and treated as data. AT-001/AT-005 flag suspicious content and AT-002 flags privileged requests caused by it |
 | Exfiltration via outbound tools | Destination allowlist in `ToolPolicy`, enforced in the client gate (and server-side for the lab). AT-003/AT-004 record attempts |
 | Accidental secret logging | Same `Redactor` on storage, JSONL/JSON, logs (redacting writer) and TUI. Field-name and value patterns |
-| Maliciously shaped JSONL imports | Line-length and event-count limits, strict parsing, schema version check, link/cycle validation, re-redaction. Imported findings are ignored |
+| Maliciously shaped JSONL imports | Line-length, event-count and total-size limits, strict parsing, schema version check, link/cycle validation, re-redaction. Imported findings are ignored. Rules run in time linear in the number of causal links |
 | Path traversal in lab server | Relative `Normal` components only, extension allowlist, canonicalization + prefix check (symlinks), size limit |
 | Demo causing real harm | Mock-only privileged tools, `.invalid` destination, fake secrets, static test guarding against process/network APIs |
 | False positives / overclaiming | Findings carry confidence and attempt status; there is no "succeeded" state; simulated traces are labelled |

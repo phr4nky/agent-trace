@@ -13,7 +13,9 @@ use crate::policy::ToolPolicy;
 use crate::provenance::TraceIndex;
 
 pub use exfiltration::{BlockedActionRule, ExfiltrationRule};
-pub use injection::{AuthoritySpoofingRule, PromptInjectionRule};
+pub use injection::{
+    AuthoritySpoofingRule, CONTENT_INDICATORS_KEY, PromptInjectionRule, record_content_indicators,
+};
 pub use trust_boundary::{CrossAgentTaintRule, TrustBoundaryRule};
 
 /// Input for rule evaluation.

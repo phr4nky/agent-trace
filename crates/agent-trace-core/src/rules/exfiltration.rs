@@ -15,13 +15,14 @@ impl Rule for ExfiltrationRule {
         "AT-003"
     }
     fn version(&self) -> u32 {
-        2
+        3
     }
     fn title(&self) -> &'static str {
         "Potential exfiltration attempt to non-allowlisted destination"
     }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         let mut out = Vec::new();
+        let sensitive_causes = ctx.index.sensitive_causes();
         for request in ctx
             .record
             .events
@@ -32,21 +33,21 @@ impl Rule for ExfiltrationRule {
             if !ctx.policy.is_outbound(tool) {
                 continue;
             }
-            let args = request.payload.get("arguments").unwrap_or(&request.payload);
-            let destination = args
-                .get("destination")
-                .or_else(|| args.get("url"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if ctx.policy.destination_allowed(destination) {
+            let args = request
+                .payload
+                .get("arguments")
+                .unwrap_or(&request.payload)
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
+            let Some(destination) = ctx.policy.disallowed_destination(&args) else {
                 continue;
-            }
-            let mut sensitive: Vec<_> = ctx
-                .index
-                .cause_ancestors(request.event_id)
-                .into_iter()
-                .filter(|e| e.is_sensitive())
-                .collect();
+            };
+            let destination = destination.as_str();
+            let (mut sensitive, more) = sensitive_causes
+                .get(&request.event_id)
+                .cloned()
+                .unwrap_or_default();
             if request.is_sensitive() {
                 sensitive.push(request);
             }
@@ -74,9 +75,10 @@ impl Rule for ExfiltrationRule {
                     description: format!(
                         "Outbound tool `{tool}` requested destination host `{host}` (not allowlisted) \
                          at event #{} while the causal chain contains data marked sensitive \
-                         (redacted values in {} event(s)). {outcome_text}",
+                         (redacted values in {}{} event(s)). {outcome_text}",
                         request.sequence,
-                        sensitive.len()
+                        sensitive.len(),
+                        if more { "+" } else { "" }
                     ),
                     severity: Severity::High,
                     confidence: Confidence::High,

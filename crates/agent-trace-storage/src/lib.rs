@@ -70,6 +70,55 @@ pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Create (or truncate) a file that only the current user can read, without a window in
+/// which it is readable by others. A symlink at `path` is refused rather than followed.
+pub fn create_private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("refusing to write through symlink {}", path.display()),
+        ));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    // An existing file keeps its old mode on open; restrict it before anything is written.
+    restrict_file(path)?;
+    Ok(file)
+}
+
+#[cfg(all(test, unix))]
+mod private_file_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    // Regression: exports were created with umask permissions and chmod 0600 only after
+    // the content was written, and a pre-placed symlink was followed.
+    #[test]
+    fn private_files_are_0600_from_the_start_and_symlinks_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.json");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let _f = create_private_file(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        let link = dir.path().join("link.json");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        assert!(create_private_file(&link).is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+    }
+}
+
 /// Restrict an existing file to the current user where supported.
 pub fn restrict_file(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]

@@ -1,8 +1,7 @@
-use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use agent_trace_storage::{restrict_file, write_json_report, write_jsonl};
+use agent_trace_storage::{create_private_file, write_json_report, write_jsonl};
 
 use super::{Context, analyze_and_store, resolve_target};
 use crate::{EXIT_OK, ExportFormat, TraceTarget};
@@ -22,7 +21,7 @@ pub fn run(
         findings = analyze_and_store(&mut store, &record)?;
     }
     let writer: Box<dyn Write> = match output {
-        Some(path) => Box::new(BufWriter::new(File::create(path)?)),
+        Some(path) => Box::new(BufWriter::new(create_private_file(path)?)),
         None => Box::new(std::io::stdout().lock()),
     };
     match format {
@@ -30,7 +29,6 @@ pub fn run(
         ExportFormat::Jsonl => write_jsonl(writer, &record, &findings)?,
     }
     if let Some(path) = output {
-        restrict_file(path)?;
         eprintln!("exported trace {id} (redacted) to {}", path.display());
     }
     Ok(EXIT_OK)
