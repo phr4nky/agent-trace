@@ -3,9 +3,10 @@
 use std::sync::OnceLock;
 
 use regex::Regex;
+use serde_json::{Map, Value};
 
 use super::{FindingDraft, Rule, RuleContext};
-use crate::event::{Event, TrustLevel};
+use crate::event::{Event, TrustLevel, value_text};
 use crate::finding::{AttemptStatus, Confidence, Finding, Severity};
 
 struct Indicator {
@@ -76,13 +77,78 @@ fn authority_indicators() -> &'static [Indicator] {
     })
 }
 
-fn matches(event: &Event, indicators: &[Indicator]) -> Vec<&'static str> {
+/// Event metadata key holding indicator labels that were computed on the full content
+/// before the payload was truncated for storage (see [`record_content_indicators`]).
+pub const CONTENT_INDICATORS_KEY: &str = "content_indicators";
+
+const AT001: &str = "AT-001";
+const AT005: &str = "AT-005";
+
+/// Labels stored for `rule_id` in the event metadata. Only used as a set of names that are
+/// matched against the fixed indicator lists, so unknown or forged labels have no effect.
+fn stored_labels<'a>(event: &'a Event, rule_id: &str) -> Vec<&'a str> {
+    event
+        .metadata
+        .get(CONTENT_INDICATORS_KEY)
+        .and_then(|m| m.get(rule_id))
+        .and_then(Value::as_array)
+        .map(|labels| labels.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default()
+}
+
+fn matches(event: &Event, indicators: &[Indicator], rule_id: &str) -> Vec<&'static str> {
     let text = event.payload_text();
+    let stored = stored_labels(event, rule_id);
     indicators
         .iter()
-        .filter(|i| i.regex.is_match(&text))
+        .filter(|i| stored.contains(&i.label) || i.regex.is_match(&text))
         .map(|i| i.label)
         .collect()
+}
+
+fn labels_in(text: &str, indicators: &[Indicator]) -> Vec<Value> {
+    indicators
+        .iter()
+        .filter(|i| i.regex.is_match(text))
+        .map(|i| Value::from(i.label))
+        .collect()
+}
+
+/// Scan the *original* payload of an event whose stored payload was truncated, and keep the
+/// indicator labels in `metadata`. Without this, content past the size limits would be seen
+/// by the agent but never by AT-001/AT-005. Existing labels are kept (labels only ever add
+/// findings); only labels from the fixed indicator lists are stored.
+pub fn record_content_indicators(metadata: &mut Map<String, Value>, original_payload: &Value) {
+    let text = value_text(original_payload);
+    let mut found = Map::new();
+    for (rule_id, indicators) in [
+        (AT001, injection_indicators()),
+        (AT005, authority_indicators()),
+    ] {
+        let mut labels = labels_in(&text, indicators);
+        if let Some(existing) = metadata
+            .get(CONTENT_INDICATORS_KEY)
+            .and_then(|m| m.get(rule_id))
+            .and_then(Value::as_array)
+        {
+            for label in existing {
+                let known = label
+                    .as_str()
+                    .is_some_and(|l| indicators.iter().any(|i| i.label == l));
+                if known && !labels.contains(label) {
+                    labels.push(label.clone());
+                }
+            }
+        }
+        if !labels.is_empty() {
+            found.insert(rule_id.to_owned(), Value::Array(labels));
+        }
+    }
+    if found.is_empty() {
+        metadata.remove(CONTENT_INDICATORS_KEY);
+    } else {
+        metadata.insert(CONTENT_INDICATORS_KEY.into(), Value::Object(found));
+    }
 }
 
 fn content_events<'a>(ctx: &RuleContext<'a>) -> impl Iterator<Item = &'a Event> {
@@ -97,10 +163,10 @@ pub struct PromptInjectionRule;
 
 impl Rule for PromptInjectionRule {
     fn id(&self) -> &'static str {
-        "AT-001"
+        AT001
     }
     fn version(&self) -> u32 {
-        1
+        2
     }
     fn title(&self) -> &'static str {
         "Potential prompt injection in lower-trust content"
@@ -108,7 +174,7 @@ impl Rule for PromptInjectionRule {
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         content_events(ctx)
             .filter_map(|event| {
-                let hits = matches(event, injection_indicators());
+                let hits = matches(event, injection_indicators(), AT001);
                 if hits.is_empty() {
                     return None;
                 }
@@ -149,10 +215,10 @@ pub struct AuthoritySpoofingRule;
 
 impl Rule for AuthoritySpoofingRule {
     fn id(&self) -> &'static str {
-        "AT-005"
+        AT005
     }
     fn version(&self) -> u32 {
-        1
+        2
     }
     fn title(&self) -> &'static str {
         "Lower-trust content claims system-level authority"
@@ -160,7 +226,7 @@ impl Rule for AuthoritySpoofingRule {
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         content_events(ctx)
             .filter_map(|event| {
-                let hits = matches(event, authority_indicators());
+                let hits = matches(event, authority_indicators(), AT005);
                 if hits.is_empty() {
                     return None;
                 }

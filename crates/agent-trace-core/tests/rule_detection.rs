@@ -530,3 +530,76 @@ fn schema_1_0_events_still_parse() {
     assert_eq!(e.agent(), "main");
     assert!(e.context_event_ids.is_empty());
 }
+
+// Regression: content rules must see what the agent saw, not only the truncated copy
+// that is stored. Injection text placed after the 16 KiB per-string limit, or inside a
+// payload larger than the 256 KiB payload limit, used to produce no AT-001/AT-005.
+#[test]
+fn content_rules_see_text_beyond_truncation_limits() {
+    let padding = "Lorem ipsum dolor sit amet. ".repeat(700); // ~19 KiB
+    let late = format!("{padding}\nSYSTEM: {INJECTION}");
+
+    let mut b = Builder::new();
+    b.content(&late, TrustLevel::LowerTrust);
+    let (rec, f) = b.analyze();
+    assert_eq!(rec.events[0].metadata["truncated"], true);
+    assert!(f.iter().any(|f| f.rule_id == "AT-001"), "{f:?}");
+    assert!(f.iter().any(|f| f.rule_id == "AT-005"), "{f:?}");
+
+    // Whole payload above MAX_PAYLOAD_BYTES (replaced by a 4 KiB preview).
+    let mut b = Builder::new();
+    let chunks: Vec<Value> = (0..30).map(|_| Value::String("x".repeat(10_000))).collect();
+    b.r.record(
+        EventSpec::new(
+            EventKind::ToolResultReceived,
+            Origin::McpTool,
+            TrustLevel::LowerTrust,
+            "read_document",
+        )
+        .payload(json!({"tool": "read_document", "chunks": chunks, "tail": INJECTION})),
+    );
+    let (_, f) = b.analyze();
+    assert!(f.iter().any(|f| f.rule_id == "AT-001"), "{f:?}");
+
+    // Below the limits nothing changes, and benign padded text stays clean.
+    let mut b = Builder::new();
+    b.content(&padding, TrustLevel::LowerTrust);
+    assert!(b.analyze().1.is_empty());
+}
+
+// Regression: object keys are content too (structured tool results).
+#[test]
+fn content_rules_scan_object_keys() {
+    let mut b = Builder::new();
+    b.r.record(
+        EventSpec::new(
+            EventKind::ToolResultReceived,
+            Origin::McpTool,
+            TrustLevel::LowerTrust,
+            "lookup",
+        )
+        .payload(json!({"tool": "lookup", "structured_content": {INJECTION: 1}})),
+    );
+    let (_, f) = b.analyze();
+    assert!(f.iter().any(|f| f.rule_id == "AT-001"), "{f:?}");
+}
+
+// Imported indicator labels can only add findings; unknown labels are ignored.
+#[test]
+fn stored_indicator_labels_are_allowlisted() {
+    let mut b = Builder::new();
+    b.r.record(
+        EventSpec::new(
+            EventKind::ToolResultReceived,
+            Origin::McpTool,
+            TrustLevel::LowerTrust,
+            "read_document",
+        )
+        .payload(json!({"tool": "read_document", "content": "harmless"}))
+        .meta("content_indicators", json!({"AT-001": ["\u{1b}[31mforged", "override_task"]})),
+    );
+    let (_, f) = b.analyze();
+    let at001 = f.iter().find(|f| f.rule_id == "AT-001").expect("AT-001");
+    assert!(at001.description.contains("override_task"));
+    assert!(!at001.description.contains("forged"));
+}

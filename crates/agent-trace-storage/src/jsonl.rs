@@ -7,6 +7,7 @@
 
 use std::io::{BufRead, Read, Write};
 
+use agent_trace_core::rules::record_content_indicators;
 use agent_trace_core::{Event, Finding, Redactor, Trace, TraceRecord, validate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -205,6 +206,8 @@ pub fn redact_record(record: &TraceRecord) -> (TraceRecord, u64) {
         }
         if r.truncated {
             e.metadata.insert("truncated".into(), Value::Bool(true));
+            // Rules only see the stored (cut) payload; keep what the original contained.
+            record_content_indicators(&mut e.metadata, &event.payload);
         }
         e.payload = payload;
         e.name = redactor.scrub(&e.name);
