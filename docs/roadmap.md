@@ -1,6 +1,13 @@
 # Roadmap
 
-## v1.1.0 (this release)
+## v1.2.0 (this release)
+
+- Fixes from a multi-agent bug hunt: three more outbound-allowlist bypasses, import memory and
+  speed limits, redaction and truncation fixes, concurrent SQLite opens and migrations, loopback
+  PostgreSQL with self-signed TLS, MCP call timeout, CLI exit codes
+- AT-004 reports a denied action that was still executed as `executed`
+
+## v1.1.0
 
 - Security fixes from the v1.0.0 review: detection blind spots (truncated payloads, structured
   content, object keys), WHATWG-consistent outbound allowlist, driver-based database TLS default,

@@ -25,7 +25,7 @@ pipeline {
     }
 
     environment {
-        AGENT_TRACE_VERSION = 'v1.1.0'
+        AGENT_TRACE_VERSION = 'v1.2.0'
         AGENT_TRACE_URL     = 'https://github.com/phr4nky/agent-trace'
         // Per build: a binary left in the workspace by an earlier (untrusted) build is never reused.
         AGENT_TRACE_HOME    = "${WORKSPACE}/.agent-trace/bin-${BUILD_NUMBER}"

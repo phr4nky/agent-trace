@@ -8,6 +8,67 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-17
+
+Fixes from a multi-agent bug hunt on v1.1.0.
+
+**Upgrade notes:**
+
+- The outbound allowlist is stricter again. A CI gate that passed with v1.1.0 can report AT-003 for
+  the same traces when a destination used a slashless URL, a recipient list or a `cc`/`bcc` field.
+- AT-004 moves to rule version 2, so its finding IDs change.
+- Usage errors (for example `--fail-on High`) now exit with code 1 instead of 2. Exit code 2 now
+  always means findings.
+
+### Added
+
+- `McpSession::with_call_timeout` for library users. A `tools/call` without an answer now fails
+  after 300 s by default and is recorded as a failed tool call, instead of hanging.
+
+### Changed
+
+- AT-004 (policy denial) reports `executed` with high severity when the trace records an execution
+  of the denied request (an audit-only or fail-open gate). Before, it always said "not executed".
+- Rejected imports report the line number for every structural error (duplicate id, sequence,
+  links, schema version), as the README promises.
+
+### Fixed
+
+- **Outbound allowlist bypasses** (policy gate and AT-003):
+  - URLs without slashes after the scheme (`http:evil.example/?r=://localhost`) were judged by
+    the later `://`. URLs are now parsed exactly like HTTP clients (WHATWG, the `url` crate).
+  - In a recipient list (`attacker@evil.example,ops@localhost`) only the last address was checked.
+    Now every address is.
+  - `cc`, `bcc`, `reply_to`, differently cased keys and `*_url`/`*_uri`/`*_endpoint` arguments
+    were not checked.
+- **Import:**
+  - Secrets only in event metadata did not mark the event as sensitive, so AT-003 was missed.
+  - Memory was about 30 times the file size. Events are now redacted while reading, and an
+    import holds at most 10 million JSON values.
+  - Many keys that redact to the same text made import quadratic: one crafted line took minutes.
+  - Export and re-import truncated already truncated text again and lost the original byte
+    count.
+  - Error messages no longer repeat their cause.
+- **Storage:**
+  - Opening a SQLite database no longer changes the permissions of an existing directory.
+    `sqlite:./traces.db` locked other users out of the project directory, and `/tmp` failed.
+  - Several commands opening a new SQLite database at the same time no longer fail with
+    "database is locked" or "table already exists".
+  - On PostgreSQL and MySQL, re-analysing a trace while it is recorded live can no longer
+    collide.
+  - A PostgreSQL server on localhost with a self-signed certificate (the Debian/Ubuntu default)
+    works without `sslmode=disable`. Connection errors show their cause.
+  - Export files can no longer be redirected by a symlink created between the check and the
+    write.
+- **MCP and agents:**
+  - Tool result text with duplicated JSON keys could carry instructions the model saw but the
+    trace did not. The full text is now recorded.
+  - Tool calls with non-object input skipped the policy gate and the trace.
+- **CLI:**
+  - Piping output into `head` no longer crashes with exit code 101.
+  - `demo run` no longer loses already recorded traces when a scenario file is broken or the
+    database fails during the run. On a database failure the traces are saved as JSONL.
+
 ## [1.1.0] - 2026-11-17
 
 Security fixes from the review of v1.0.0.
@@ -75,6 +136,7 @@ First release.
 - CLI commands `demo`, `trace`, `analyze --fail-on`, `explore`, `export` and `import`.
 - CI examples for GitHub Actions, GitLab CI and Jenkins.
 
-[Unreleased]: https://github.com/phr4nky/agent-trace/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/phr4nky/agent-trace/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/phr4nky/agent-trace/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/phr4nky/agent-trace/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/phr4nky/agent-trace/releases/tag/v1.0.0
