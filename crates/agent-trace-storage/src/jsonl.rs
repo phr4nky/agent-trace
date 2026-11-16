@@ -215,8 +215,10 @@ pub fn redact_record(record: &TraceRecord) -> (TraceRecord, u64) {
         total += r.redactions;
         if r.redactions > 0 {
             let prev = e.redaction_count();
-            e.metadata
-                .insert("redactions".into(), Value::from(prev + r.redactions));
+            e.metadata.insert(
+                "redactions".into(),
+                Value::from(prev.saturating_add(r.redactions)),
+            );
         }
         if r.truncated {
             e.metadata.insert("truncated".into(), Value::Bool(true));

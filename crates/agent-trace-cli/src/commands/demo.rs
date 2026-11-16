@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -10,7 +9,7 @@ use agent_trace_mcp::{
     run_scenario_with,
 };
 use agent_trace_storage::{
-    LiveWriter, StorageError, TraceSource, restrict_file, write_json_report, write_jsonl,
+    LiveWriter, StorageError, TraceSource, create_private_file, write_json_report, write_jsonl,
 };
 use anyhow::Context as _;
 
@@ -173,17 +172,15 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
         let jsonl_path = exports.join(format!("{base}.jsonl"));
         let report_path = exports.join(format!("{base}.findings.json"));
         write_jsonl(
-            BufWriter::new(File::create(&jsonl_path)?),
+            BufWriter::new(create_private_file(&jsonl_path)?),
             &record,
             &findings,
         )?;
         write_json_report(
-            BufWriter::new(File::create(&report_path)?),
+            BufWriter::new(create_private_file(&report_path)?),
             &record,
             &findings,
         )?;
-        restrict_file(&jsonl_path)?;
-        restrict_file(&report_path)?;
 
         let agents = agent_trace_core::Trace::agents(&record.events);
         println!(

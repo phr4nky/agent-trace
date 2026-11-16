@@ -141,7 +141,7 @@ impl LabServer {
                 ))]));
             }
         };
-        match std::fs::read_to_string(&path) {
+        match read_bounded(&path) {
             Ok(text) => Ok(CallToolResult::success(vec![ContentBlock::text(text)])),
             Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "read_document failed: {}",
@@ -216,6 +216,31 @@ pub async fn serve_stdio(documents_root: impl AsRef<Path>) -> anyhow::Result<()>
     let service = server.serve(rmcp::transport::stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+/// Read a resolved document from one open handle: the type and size are checked on the
+/// opened file itself and the read is capped, so swapping or growing the file after
+/// [`resolve_fixture_path`] cannot bypass the limits.
+fn read_bounded(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() || meta.len() > MAX_DOCUMENT_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "not a regular document within the size limit",
+        ));
+    }
+    let mut buf = Vec::new();
+    file.take(MAX_DOCUMENT_BYTES + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > MAX_DOCUMENT_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "document grew beyond the size limit",
+        ));
+    }
+    String::from_utf8(buf)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "not UTF-8"))
 }
 
 #[cfg(test)]
