@@ -100,7 +100,10 @@ pub fn explore(
         findings = analyze_and_store(&mut store, &record)?;
     }
     match snapshot {
-        Some((keys, size)) => print!("{}", crate::tui::snapshot(record, findings, keys, size)?),
+        Some((keys, size)) => print!(
+            "{}",
+            crate::output::term_safe_lines(&crate::tui::snapshot(record, findings, keys, size)?)
+        ),
         None => {
             let follow = follow.then_some(crate::tui::Follow {
                 store: &mut store,

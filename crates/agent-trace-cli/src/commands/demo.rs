@@ -160,7 +160,7 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
                 );
                 println!(
                     "  error    : {}\n",
-                    agent_trace_core::Redactor::new().scrub(&e)
+                    crate::output::term_safe(&agent_trace_core::Redactor::new().scrub(&e))
                 );
                 continue;
             }

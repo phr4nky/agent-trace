@@ -1,7 +1,7 @@
 use agent_trace_core::Event;
 
 use super::{Context, resolve_target};
-use crate::output::{finding_line, seq_of};
+use crate::output::{finding_line, seq_of, term_safe};
 use crate::{EXIT_OK, TraceTarget};
 
 pub fn list(ctx: &Context) -> anyhow::Result<u8> {
@@ -25,7 +25,7 @@ pub fn list(ctx: &Context) -> anyhow::Result<u8> {
             "{:>4}  {:<36}  {:<32}  {:<9}  {:<9}  {:>6}  {:>8}  {:<8}  {}",
             t.created_order,
             t.trace.trace_id,
-            truncate(&t.trace.name, 32),
+            truncate(&term_safe(&t.trace.name), 32),
             t.trace.execution_mode.as_str(),
             t.trace.status.as_str(),
             t.event_count,
@@ -56,19 +56,19 @@ pub fn show(ctx: &Context, target: &TraceTarget, payload: bool) -> anyhow::Resul
         s.mode(t.execution_mode),
         t.status.as_str(),
         record.events.len(),
-        agents.join(", ")
+        term_safe(&agents.join(", "))
     );
-    println!("name: {}   created: {}", t.name, t.created_at);
+    println!("name: {}   created: {}", term_safe(&t.name), t.created_at);
     if !t.metadata.is_empty() {
         println!(
             "metadata: {}",
-            serde_json::Value::Object(t.metadata.clone())
+            term_safe(&serde_json::Value::Object(t.metadata.clone()).to_string())
         );
     }
     println!();
     let agent_col = |name: &str| {
         if multi {
-            format!("{:<13} ", truncate(name, 13))
+            format!("{:<13} ", truncate(&term_safe(name), 13))
         } else {
             String::new()
         }
@@ -95,13 +95,13 @@ pub fn show(ctx: &Context, target: &TraceTarget, payload: bool) -> anyhow::Resul
             e.kind.as_str(),
             e.origin.as_str(),
             e.trust_level.as_str(),
-            truncate(&e.name, 22),
+            truncate(&term_safe(&e.name), 22),
             e.tool_state.map(|t| t.as_str()).unwrap_or("-"),
             links(&record, e),
             s.event_marker(e),
         );
         if payload {
-            println!("        {}", s.dim(&e.payload.to_string()));
+            println!("        {}", s.dim(&term_safe(&e.payload.to_string())));
         }
     }
     println!();

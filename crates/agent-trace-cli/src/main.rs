@@ -280,7 +280,10 @@ fn main() -> ExitCode {
         Ok(code) => ExitCode::from(code),
         Err(err) => {
             let redactor = agent_trace_core::Redactor::new();
-            eprintln!("error: {}", redactor.scrub(&format!("{err:#}")));
+            eprintln!(
+                "error: {}",
+                output::term_safe(&redactor.scrub(&format!("{err:#}")))
+            );
             ExitCode::from(EXIT_ERROR)
         }
     }
