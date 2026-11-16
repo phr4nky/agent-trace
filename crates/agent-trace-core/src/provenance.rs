@@ -13,6 +13,82 @@ use crate::redact::MAX_PAYLOAD_BYTES;
 pub struct TraceIndex<'a> {
     by_id: HashMap<Uuid, &'a Event>,
     children: HashMap<Uuid, Vec<&'a Event>>,
+    /// Events in sequence order.
+    order: Vec<&'a Event>,
+    /// Every link points to an earlier event (always true for validated traces). Enables
+    /// the single-pass computations below; otherwise they fall back to per-event walks.
+    backward_only: bool,
+}
+
+/// Maximum number of events kept in an evidence path; longer paths keep the source and the
+/// events nearest to the request.
+pub const MAX_EVIDENCE_PATH: usize = 64;
+/// Maximum number of sensitive ancestors tracked per event (see [`TraceIndex::sensitive_causes`]).
+pub const MAX_SENSITIVE_CAUSES: usize = 32;
+
+/// One nearest matching ancestor: hop distance, the matching event and the first hop.
+#[derive(Debug, Clone, Copy)]
+struct Hit<'a> {
+    dist: u32,
+    source: &'a Event,
+    next: Uuid,
+}
+
+/// Nearest matching cause of every event, computed in one pass over the trace.
+/// For each event it keeps the nearest match and the nearest match of a *different agent*
+/// than that one, which answers "nearest match whose agent is not X" for any X.
+pub struct NearestCauses<'i, 'a> {
+    index: &'i TraceIndex<'a>,
+    table: HashMap<Uuid, [Option<Hit<'a>>; 2]>,
+    pred: Box<dyn Fn(&Event) -> bool + 'i>,
+}
+
+impl<'a> NearestCauses<'_, 'a> {
+    /// Shortest explicit cause path from the nearest matching ancestor to `id` (both
+    /// inclusive), optionally excluding matches of `exclude_agent`. Same semantics as
+    /// [`TraceIndex::cause_path`]; paths longer than [`MAX_EVIDENCE_PATH`] are shortened.
+    pub fn path(&self, id: Uuid, exclude_agent: Option<&str>) -> Option<Vec<&'a Event>> {
+        if !self.index.backward_only {
+            let pred = &self.pred;
+            return self
+                .index
+                .cause_path(id, |e| {
+                    pred(e) && exclude_agent.is_none_or(|a| e.agent() != a)
+                })
+                .map(cap_path);
+        }
+        let hits = self.table.get(&id)?;
+        let ok = |h: &&Hit<'a>| exclude_agent.is_none_or(|a| h.source.agent() != a);
+        let mut hit = *hits.iter().flatten().find(ok)?;
+        let mut path = vec![self.index.get(id)?];
+        loop {
+            // Stop after the request-side part of a long path; the source closes it.
+            if hit.next == hit.source.event_id || path.len() >= MAX_EVIDENCE_PATH - 1 {
+                path.push(hit.source);
+                break;
+            }
+            path.push(self.index.get(hit.next)?);
+            let source = hit.source.event_id;
+            hit = *self
+                .table
+                .get(&hit.next)?
+                .iter()
+                .flatten()
+                .find(|h| h.source.event_id == source)?;
+        }
+        path.reverse();
+        Some(path)
+    }
+}
+
+/// Keep the source and the request-side end of an over-long path (same shape as above).
+fn cap_path(path: Vec<&Event>) -> Vec<&Event> {
+    if path.len() <= MAX_EVIDENCE_PATH {
+        return path;
+    }
+    let mut out = vec![path[0]];
+    out.extend_from_slice(&path[path.len() - (MAX_EVIDENCE_PATH - 1)..]);
+    out
 }
 
 impl<'a> TraceIndex<'a> {
@@ -29,7 +105,121 @@ impl<'a> TraceIndex<'a> {
             list.sort_by_key(|e| e.sequence);
             list.dedup_by_key(|e| e.event_id);
         }
-        Self { by_id, children }
+        let mut order: Vec<&'a Event> = events.iter().collect();
+        order.sort_by_key(|e| e.sequence);
+        let backward_only = order.iter().all(|e| {
+            e.links()
+                .all(|l| by_id.get(&l).is_none_or(|t| t.sequence < e.sequence))
+        });
+        Self {
+            by_id,
+            children,
+            order,
+            backward_only,
+        }
+    }
+
+    /// Precompute the nearest ancestor matching `pred` for every event (linear in the
+    /// number of links). Use this instead of calling [`Self::cause_path`] per event.
+    pub fn nearest_causes<'i>(
+        &'i self,
+        pred: impl Fn(&Event) -> bool + 'i,
+    ) -> NearestCauses<'i, 'a> {
+        let mut table: HashMap<Uuid, [Option<Hit<'a>>; 2]> = HashMap::new();
+        if self.backward_only {
+            for event in &self.order {
+                let mut candidates: Vec<Hit<'a>> = Vec::new();
+                for link in event.cause_links() {
+                    let Some(target) = self.get(link) else {
+                        continue;
+                    };
+                    if pred(target) {
+                        candidates.push(Hit {
+                            dist: 1,
+                            source: target,
+                            next: link,
+                        });
+                    }
+                    if let Some(hits) = table.get(&link) {
+                        candidates.extend(hits.iter().flatten().map(|h| Hit {
+                            dist: h.dist + 1,
+                            source: h.source,
+                            next: link,
+                        }));
+                    }
+                }
+                // Stable: on equal distance the earlier link (direct cause first) wins.
+                candidates.sort_by_key(|h| h.dist);
+                let best = candidates.first().copied();
+                let second = best.and_then(|b| {
+                    candidates
+                        .iter()
+                        .find(|h| h.source.agent() != b.source.agent())
+                        .copied()
+                });
+                if best.is_some() {
+                    table.insert(event.event_id, [best, second]);
+                }
+            }
+        }
+        NearestCauses {
+            index: self,
+            table,
+            pred: Box::new(pred),
+        }
+    }
+
+    /// For every event, its sensitive causal ancestors (nearest first by sequence, at most
+    /// [`MAX_SENSITIVE_CAUSES`]) and whether more exist. Linear in links times the cap.
+    pub fn sensitive_causes(&self) -> HashMap<Uuid, (Vec<&'a Event>, bool)> {
+        let mut table: HashMap<Uuid, (Vec<&'a Event>, bool)> = HashMap::new();
+        if !self.backward_only {
+            for event in &self.order {
+                let all: Vec<&'a Event> = self
+                    .cause_ancestors(event.event_id)
+                    .into_iter()
+                    .filter(|e| e.is_sensitive())
+                    .collect();
+                let more = all.len() > MAX_SENSITIVE_CAUSES;
+                let mut all = all;
+                all.sort_by_key(|e| std::cmp::Reverse(e.sequence));
+                all.truncate(MAX_SENSITIVE_CAUSES);
+                table.insert(event.event_id, (all, more));
+            }
+            return table;
+        }
+        let sensitive: HashSet<Uuid> = self
+            .order
+            .iter()
+            .filter(|e| e.is_sensitive())
+            .map(|e| e.event_id)
+            .collect();
+        for event in &self.order {
+            let mut set: Vec<&'a Event> = Vec::new();
+            let mut more = false;
+            for link in event.cause_links() {
+                let Some(target) = self.get(link) else {
+                    continue;
+                };
+                if sensitive.contains(&link) {
+                    set.push(target);
+                }
+                if let Some((inherited, m)) = table.get(&link) {
+                    set.extend(inherited.iter().copied());
+                    more |= *m;
+                }
+            }
+            set.sort_by_key(|e| std::cmp::Reverse(e.sequence));
+            set.dedup_by_key(|e| e.event_id);
+            if set.len() > MAX_SENSITIVE_CAUSES {
+                set.truncate(MAX_SENSITIVE_CAUSES);
+                more = true;
+            }
+            if !set.is_empty() {
+                table.insert(event.event_id, (set, more));
+            }
+        }
+        table
     }
 
     pub fn get(&self, id: Uuid) -> Option<&'a Event> {

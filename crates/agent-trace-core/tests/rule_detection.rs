@@ -631,3 +631,47 @@ fn at003_not_silenced_by_parser_tricks_or_decoy_arguments() {
         assert!(f.iter().any(|f| f.rule_id == "AT-003"), "{args}: {f:?}");
     }
 }
+
+// Regression: every privileged/outbound request walked its whole ancestry, so a crafted
+// chain made analysis quadratic (32k events took minutes). Analysis must stay fast and the
+// findings for the chain must still be produced.
+#[test]
+fn long_causal_chains_are_analyzed_in_linear_time() {
+    let mut r = TraceRecorder::deterministic("chain", ExecutionMode::Live, "chain");
+    let mut prev = r.record(
+        EventSpec::new(
+            EventKind::ToolResultReceived,
+            Origin::McpTool,
+            TrustLevel::LowerTrust,
+            "read_document",
+        )
+        .payload(json!({"content": "API_TOKEN=FAKE_SECRET_FOR_TESTING_ONLY"})),
+    );
+    let n = 20_000;
+    for _ in 0..n {
+        prev = r.record(
+            EventSpec::new(
+                EventKind::ToolCallRequested,
+                Origin::Agent,
+                TrustLevel::Unknown,
+                "send_webhook_mock",
+            )
+            .payload(json!({"tool": "send_webhook_mock",
+                "arguments": {"destination": "https://marker.invalid/x"}}))
+            .caused_by(prev)
+            .tool_state(ToolState::Requested),
+        );
+    }
+    let rec = r.finish();
+    let start = std::time::Instant::now();
+    let f = Analyzer::default().analyze(&rec, rec.trace.created_at);
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "took {elapsed:?}"
+    );
+    assert_eq!(f.iter().filter(|f| f.rule_id == "AT-002").count(), n);
+    assert_eq!(f.iter().filter(|f| f.rule_id == "AT-003").count(), n);
+    // Evidence stays bounded even for very long paths.
+    assert!(f.iter().all(|f| f.evidence_event_ids.len() <= 70));
+}

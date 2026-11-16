@@ -18,6 +18,8 @@ use crate::StorageError;
 pub const MAX_LINE_BYTES: usize = 2 * 1024 * 1024;
 /// Maximum number of events in one imported trace.
 pub const MAX_EVENTS: usize = 100_000;
+/// Maximum total size of one imported file (lines and events alone would allow ~200 GB).
+pub const MAX_IMPORT_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "record_type", rename_all = "snake_case")]
@@ -62,7 +64,12 @@ pub fn write_jsonl(
 
 /// Parse, redact and validate a JSONL trace.
 pub fn read_jsonl(input: impl Read) -> Result<Imported, StorageError> {
+    read_jsonl_limited(input, MAX_IMPORT_BYTES)
+}
+
+fn read_jsonl_limited(input: impl Read, max_total: u64) -> Result<Imported, StorageError> {
     let mut reader = std::io::BufReader::new(input);
+    let mut total: u64 = 0;
     let mut trace: Option<Trace> = None;
     let mut events = Vec::new();
     let mut ignored_findings = 0;
@@ -76,6 +83,13 @@ pub fn read_jsonl(input: impl Read) -> Result<Imported, StorageError> {
             .read_until(b'\n', &mut buf)?;
         if read == 0 {
             break;
+        }
+        total += read as u64;
+        if total > max_total {
+            return Err(StorageError::Import {
+                line: line_no,
+                message: format!("file exceeds {max_total} bytes"),
+            });
         }
         if buf.len() > MAX_LINE_BYTES {
             return Err(StorageError::Import {
@@ -216,4 +230,18 @@ pub fn redact_record(record: &TraceRecord) -> (TraceRecord, u64) {
     }
     trace.name = redactor.scrub(&trace.name);
     (TraceRecord { trace, events }, total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: only per-line and event-count limits existed, no total size limit.
+    #[test]
+    fn total_import_size_is_limited() {
+        let line = format!("{}\n", " ".repeat(1000));
+        let input = line.repeat(20);
+        let err = read_jsonl_limited(input.as_bytes(), 10_000).unwrap_err();
+        assert!(err.to_string().contains("exceeds 10000 bytes"), "{err}");
+    }
 }

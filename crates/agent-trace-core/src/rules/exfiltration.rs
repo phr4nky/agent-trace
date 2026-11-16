@@ -22,6 +22,7 @@ impl Rule for ExfiltrationRule {
     }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         let mut out = Vec::new();
+        let sensitive_causes = ctx.index.sensitive_causes();
         for request in ctx
             .record
             .events
@@ -43,12 +44,10 @@ impl Rule for ExfiltrationRule {
                 continue;
             };
             let destination = destination.as_str();
-            let mut sensitive: Vec<_> = ctx
-                .index
-                .cause_ancestors(request.event_id)
-                .into_iter()
-                .filter(|e| e.is_sensitive())
-                .collect();
+            let (mut sensitive, more) = sensitive_causes
+                .get(&request.event_id)
+                .cloned()
+                .unwrap_or_default();
             if request.is_sensitive() {
                 sensitive.push(request);
             }
@@ -76,9 +75,10 @@ impl Rule for ExfiltrationRule {
                     description: format!(
                         "Outbound tool `{tool}` requested destination host `{host}` (not allowlisted) \
                          at event #{} while the causal chain contains data marked sensitive \
-                         (redacted values in {} event(s)). {outcome_text}",
+                         (redacted values in {}{} event(s)). {outcome_text}",
                         request.sequence,
-                        sensitive.len()
+                        sensitive.len(),
+                        if more { "+" } else { "" }
                     ),
                     severity: Severity::High,
                     confidence: Confidence::High,
