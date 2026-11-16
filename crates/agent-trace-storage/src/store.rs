@@ -209,29 +209,64 @@ impl Store {
     }
 
     fn migrate(&mut self) -> Result<(), StorageError> {
-        self.exec(
-            "CREATE TABLE IF NOT EXISTS schema_migrations (
-                version BIGINT NOT NULL PRIMARY KEY,
-                applied_at VARCHAR(40) NOT NULL
-            )",
-            &[],
-        )?;
-        let current = self.rows(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-            &[],
-        )?;
-        let current = current
-            .first()
-            .and_then(|r| r.first())
-            .map(SqlValue::as_i64)
-            .transpose()?
+        let dialect = self.dialect();
+        // Fast path without any lock: nothing to do on an up-to-date database (also keeps
+        // read-only database files usable).
+        let latest = migrations(dialect).last().map(|(v, _)| *v).unwrap_or(0);
+        let current = self
+            .rows(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                &[],
+            )
+            .ok()
+            .and_then(|rows| rows.first().and_then(|r| r.first()).cloned())
+            .and_then(|v| v.as_i64().ok())
             .unwrap_or(0);
-        for (version, statements) in migrations(self.dialect()) {
-            if version <= current {
-                continue;
-            }
+        if current >= latest {
+            return Ok(());
+        }
+        // MySQL commits DDL implicitly, so a transaction cannot serialize migrations there;
+        // a named session lock does.
+        if dialect == Dialect::MySql {
+            self.exec("SELECT GET_LOCK('agent_trace_migrate', 60)", &[])?;
+        }
+        let result = self.migrate_locked(dialect);
+        if dialect == Dialect::MySql {
+            let _ = self.exec("SELECT RELEASE_LOCK('agent_trace_migrate')", &[]);
+        }
+        result
+    }
+
+    /// Apply pending migrations. Each one runs in a transaction that first takes the
+    /// migration lock and then re-reads the schema version, so concurrent first opens of
+    /// the same database apply every migration exactly once.
+    fn migrate_locked(&mut self, dialect: Dialect) -> Result<(), StorageError> {
+        for (version, statements) in migrations(dialect) {
             // Note: MySQL/MariaDB commit DDL implicitly; there a failed migration may be partial.
             self.transaction(|s| {
+                if let Some(lock) = dialect.migration_xact_lock() {
+                    s.exec(lock, &[])?;
+                }
+                s.exec(
+                    "CREATE TABLE IF NOT EXISTS schema_migrations (
+                        version BIGINT NOT NULL PRIMARY KEY,
+                        applied_at VARCHAR(40) NOT NULL
+                    )",
+                    &[],
+                )?;
+                let current = s
+                    .rows(
+                        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                        &[],
+                    )?
+                    .first()
+                    .and_then(|r| r.first())
+                    .map(SqlValue::as_i64)
+                    .transpose()?
+                    .unwrap_or(0);
+                if version <= current {
+                    return Ok(());
+                }
                 for stmt in &statements {
                     s.exec(stmt, &[])?;
                 }
@@ -487,6 +522,11 @@ impl Store {
             .map(|f| (f.finding_id, f.created_at))
             .collect();
         self.transaction(|s| {
+            // Serialize concurrent re-analysis of the same trace (live writer + `analyze`):
+            // without it two DELETE+INSERT runs collide on the finding_id key.
+            if let Some(lock) = s.dialect().lock_trace_row() {
+                s.rows(lock, &[trace_id.to_string().into()])?;
+            }
             for (rule, version) in rule_versions {
                 // evidence_links rows go with their finding (ON DELETE CASCADE).
                 s.exec(

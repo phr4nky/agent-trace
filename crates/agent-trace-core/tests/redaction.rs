@@ -159,3 +159,58 @@ mod regressions {
         assert_eq!((once.as_str(), rep.redactions), (twice.as_str(), 0));
     }
 }
+
+mod hunt_regressions {
+    use agent_trace_core::Redactor;
+    use serde_json::{Map, Value, json};
+
+    // Regression: keys that redact to the same text were renamed by probing "#2", "#3", ...
+    // from 1 each time, so k colliding keys cost O(k^2); one import line stalled for minutes.
+    #[test]
+    fn many_colliding_keys_redact_in_linear_time() {
+        let k = 20_000;
+        let mut obj = Map::new();
+        for i in 0..k {
+            obj.insert(format!("pwd={i:08}"), Value::from(0));
+        }
+        let start = std::time::Instant::now();
+        let (out, report) = Redactor::new().redact_value(&Value::Object(obj));
+        let elapsed = start.elapsed();
+        // Generous for debug builds and slow runners; the quadratic version took minutes.
+        assert!(
+            elapsed < std::time::Duration::from_secs(30),
+            "took {elapsed:?}"
+        );
+        assert_eq!(report.redactions, k as u64);
+        // Over the payload limit the value becomes a preview; below it every key survives.
+        let small: Map<String, Value> = (0..300)
+            .map(|i| (format!("pwd={i:08}"), Value::from(i)))
+            .collect();
+        let (out_small, _) = Redactor::new().redact_value(&Value::Object(small));
+        assert_eq!(out_small.as_object().unwrap().len(), 300);
+        assert!(out.is_object());
+    }
+
+    // Regression: a truncated string (16 KiB + marker) was truncated again by every later
+    // redaction pass (export, re-import), and the marker then reported the old marker's size.
+    #[test]
+    fn redaction_of_truncated_text_is_idempotent() {
+        let r = Redactor::new();
+        let (once, rep1) = r.redact_str(&"A".repeat(100_000));
+        assert!(rep1.truncated);
+        assert!(
+            once.ends_with("…[TRUNCATED 83616 bytes]"),
+            "{}",
+            &once[once.len() - 30..]
+        );
+        let (twice, rep2) = r.redact_str(&once);
+        assert_eq!(once, twice);
+        assert!(!rep2.truncated);
+        let v = json!({"content": once});
+        let (a, _) = r.redact_value(&v);
+        assert_eq!(a, v);
+        // A marker-like suffix on text that is still too long is truncated normally.
+        let fake = format!("{}…[TRUNCATED 1 bytes]", "B".repeat(20_000));
+        assert!(r.redact_str(&fake).1.truncated);
+    }
+}

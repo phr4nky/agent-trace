@@ -242,7 +242,7 @@ impl Redactor {
                 text = new_text;
             }
         }
-        if text.len() > MAX_STRING_BYTES {
+        if text.len() > MAX_STRING_BYTES && !is_truncated_form(&text) {
             let original = text.len();
             let cut = floor_char_boundary(&text, MAX_STRING_BYTES);
             text.truncate(cut);
@@ -287,6 +287,9 @@ impl Redactor {
             }
             Value::Object(map) => {
                 let mut out = Map::new();
+                // Next free "#n" suffix per redacted key, so k colliding keys cost O(k).
+                let mut next_suffix: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
                 for (key, v) in map {
                     let is_secret_key = sensitive_key().is_match(key)
                         || (v.is_string() && secret_key_by_segment(key));
@@ -301,10 +304,15 @@ impl Redactor {
                     let (redacted_key, key_report) = self.redact_str(key);
                     report.merge(key_report);
                     let mut new_key = redacted_key.clone();
-                    let mut n = 1;
-                    while out.contains_key(&new_key) {
-                        n += 1;
-                        new_key = format!("{redacted_key}#{n}");
+                    if out.contains_key(&new_key) {
+                        let n = next_suffix.entry(redacted_key.clone()).or_insert(1);
+                        loop {
+                            *n += 1;
+                            new_key = format!("{redacted_key}#{n}");
+                            if !out.contains_key(&new_key) {
+                                break;
+                            }
+                        }
                     }
                     out.insert(new_key, new_value);
                 }
@@ -313,6 +321,18 @@ impl Redactor {
             other => other.clone(),
         }
     }
+}
+
+/// Whether `text` is already the output of truncation: at most [`MAX_STRING_BYTES`] of
+/// content followed by our `…[TRUNCATED n bytes]` marker. Such text is not cut again, so
+/// re-redacting an exported or stored value keeps the original byte count.
+fn is_truncated_form(text: &str) -> bool {
+    static MARKER: OnceLock<Regex> = OnceLock::new();
+    let marker =
+        MARKER.get_or_init(|| Regex::new(r"…\[TRUNCATED [0-9]+ bytes\]\z").expect("valid regex"));
+    marker
+        .find(text)
+        .is_some_and(|m| m.start() <= MAX_STRING_BYTES)
 }
 
 fn floor_char_boundary(s: &str, mut index: usize) -> usize {

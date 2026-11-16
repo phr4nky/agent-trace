@@ -9,11 +9,11 @@ pub fn list(ctx: &Context) -> anyhow::Result<u8> {
     let mut store = ctx.open_store()?;
     let traces = store.list_traces()?;
     if traces.is_empty() {
-        println!("no traces stored in {}", store.location());
-        println!("run: agent-trace demo run --scenario all");
+        outln!("no traces stored in {}", store.location());
+        outln!("run: agent-trace demo run --scenario all");
         return Ok(EXIT_OK);
     }
-    println!(
+    outln!(
         "{}",
         s.bold(&format!(
             "{:>4}  {:<36}  {:<32}  {:<9}  {:<9}  {:>6}  {:>8}  {:<8}  {}",
@@ -21,7 +21,7 @@ pub fn list(ctx: &Context) -> anyhow::Result<u8> {
         ))
     );
     for t in traces {
-        println!(
+        outln!(
             "{:>4}  {:<36}  {:<32}  {:<9}  {:<9}  {:>6}  {:>8}  {:<8}  {}",
             t.created_order,
             t.trace.trace_id,
@@ -49,7 +49,7 @@ pub fn show(ctx: &Context, target: &TraceTarget, payload: bool) -> anyhow::Resul
     let t = &record.trace;
     let agents = agent_trace_core::Trace::agents(&record.events);
     let multi = agents.len() > 1;
-    println!(
+    outln!(
         "{} {}  [{}]  status: {}  events: {}  agents: {}",
         s.bold("trace"),
         t.trace_id,
@@ -58,14 +58,14 @@ pub fn show(ctx: &Context, target: &TraceTarget, payload: bool) -> anyhow::Resul
         record.events.len(),
         term_safe(&agents.join(", "))
     );
-    println!("name: {}   created: {}", term_safe(&t.name), t.created_at);
+    outln!("name: {}   created: {}", term_safe(&t.name), t.created_at);
     if !t.metadata.is_empty() {
-        println!(
+        outln!(
             "metadata: {}",
             term_safe(&serde_json::Value::Object(t.metadata.clone()).to_string())
         );
     }
-    println!();
+    outln!();
     let agent_col = |name: &str| {
         if multi {
             format!("{:<13} ", truncate(&term_safe(name), 13))
@@ -73,7 +73,7 @@ pub fn show(ctx: &Context, target: &TraceTarget, payload: bool) -> anyhow::Resul
             String::new()
         }
     };
-    println!(
+    outln!(
         "{}",
         s.bold(&format!(
             "{:>4}  {}{:<26}  {:<10}  {:<11}  {:<22}  {:<15}  {}",
@@ -88,7 +88,7 @@ pub fn show(ctx: &Context, target: &TraceTarget, payload: bool) -> anyhow::Resul
         ))
     );
     for e in &record.events {
-        println!(
+        outln!(
             "{:>4}  {}{:<26}  {:<10}  {:<11}  {:<22}  {:<15}  {}  {}",
             e.sequence,
             agent_col(e.agent()),
@@ -101,19 +101,19 @@ pub fn show(ctx: &Context, target: &TraceTarget, payload: bool) -> anyhow::Resul
             s.event_marker(e),
         );
         if payload {
-            println!("        {}", s.dim(&term_safe(&e.payload.to_string())));
+            outln!("        {}", s.dim(&term_safe(&e.payload.to_string())));
         }
     }
-    println!();
+    outln!();
     if findings.is_empty() {
-        println!(
+        outln!(
             "findings: none stored (run `agent-trace analyze {}`)",
             short_id(t)
         );
     } else {
-        println!("{}", s.bold("findings:"));
+        outln!("{}", s.bold("findings:"));
         for f in &findings {
-            println!("  {}", finding_line(s, &record, f));
+            outln!("  {}", finding_line(s, &record, f));
         }
     }
     Ok(EXIT_OK)

@@ -1,8 +1,9 @@
 //! `agent-trace` — see what your AI agent really did.
 
+#[macro_use]
+mod output;
 mod commands;
 mod logging;
-mod output;
 mod tui;
 
 use std::path::PathBuf;
@@ -218,7 +219,15 @@ pub enum ImportFormat {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // Usage errors exit with 1 (error), not clap's default 2, which the documented exit-code
+    // contract reserves for findings; --help and --version exit with 0.
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            let _ = e.print();
+            return ExitCode::from(if e.use_stderr() { EXIT_ERROR } else { EXIT_OK });
+        }
+    };
     logging::init(cli.verbose);
     let color = !cli.no_color && std::env::var_os("NO_COLOR").is_none();
     let ctx = commands::Context {

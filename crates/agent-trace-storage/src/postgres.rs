@@ -46,36 +46,72 @@ pub(crate) fn effective_config(url: &str) -> Result<Config, StorageError> {
     Ok(config)
 }
 
+/// How a connection attempt reaches the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Transport {
+    Plain,
+    VerifiedTls,
+}
+
+/// Connection attempts in order. `prefer` survives `effective_config` only for loopback
+/// targets: there plaintext is tried first and verified TLS second. (libpq's `prefer` does
+/// not verify certificates, so a verifying-only attempt would refuse the self-signed
+/// certificates local distro installations ship.)
+pub(crate) fn connect_plan(config: &Config) -> &'static [Transport] {
+    match config.get_ssl_mode() {
+        SslMode::Disable => &[Transport::Plain],
+        SslMode::Prefer => &[Transport::Plain, Transport::VerifiedTls],
+        _ => &[Transport::VerifiedTls],
+    }
+}
+
+/// Error text including the driver's underlying cause (its Display shows only the kind,
+/// e.g. "error connecting to server", and keeps the reason in `source()`).
+fn pg_detail(e: &postgres::Error) -> String {
+    if let Some(db) = e.as_db_error() {
+        return db.message().to_owned();
+    }
+    let mut text = e.to_string();
+    let mut source = std::error::Error::source(e);
+    while let Some(s) = source {
+        text.push_str(&format!(": {s}"));
+        source = s.source();
+    }
+    text
+}
+
 impl PostgresBackend {
     pub fn connect(url: &str) -> Result<Self, StorageError> {
         let config = effective_config(url)?;
-        let client = if config.get_ssl_mode() == SslMode::Disable {
-            config.connect(NoTls)
-        } else {
-            let _ = rustls::crypto::ring::default_provider().install_default();
-            config.connect(MakeRustlsConnect::with_webpki_roots())
+        let mut last_error = None;
+        for transport in connect_plan(&config) {
+            let attempt = match transport {
+                Transport::Plain => config.connect(NoTls),
+                Transport::VerifiedTls => {
+                    let _ = rustls::crypto::ring::default_provider().install_default();
+                    let mut tls_config = config.clone();
+                    if tls_config.get_ssl_mode() == SslMode::Prefer {
+                        tls_config.ssl_mode(SslMode::Require);
+                    }
+                    tls_config.connect(MakeRustlsConnect::with_webpki_roots())
+                }
+            };
+            match attempt {
+                Ok(client) => return Ok(Self { client }),
+                Err(e) => last_error = Some(e),
+            }
         }
-        .map_err(|e| {
-            let detail = e
-                .as_db_error()
-                .map(|d| d.message().to_owned())
-                .unwrap_or_else(|| e.to_string());
-            StorageError::Backend(format!(
-                "cannot connect to PostgreSQL at {}: {}",
-                redact_url(url),
-                redact_url(&detail)
-            ))
-        })?;
-        Ok(Self { client })
+        let detail = last_error.map(|e| pg_detail(&e)).unwrap_or_default();
+        Err(StorageError::Backend(format!(
+            "cannot connect to PostgreSQL at {}: {}",
+            redact_url(url),
+            redact_url(&detail)
+        )))
     }
 }
 
 fn pg_err(e: postgres::Error) -> StorageError {
-    let detail = e
-        .as_db_error()
-        .map(|d| d.message().to_owned())
-        .unwrap_or_else(|| e.to_string());
-    StorageError::Backend(format!("postgresql: {detail}"))
+    StorageError::Backend(format!("postgresql: {}", redact_url(&pg_detail(&e))))
 }
 
 fn to_pg(params: &[SqlValue]) -> Vec<Box<dyn ToSql + Sync>> {
@@ -172,6 +208,31 @@ mod tests {
         assert_eq!(
             mode("postgres://u:p@db.remote/t?hostaddr=127.0.0.1"),
             SslMode::Prefer
+        );
+    }
+
+    // Regression: on loopback, `prefer` only tried verified TLS and failed hard against a
+    // local server with a self-signed certificate (distro default); libpq's prefer would
+    // have connected.
+    #[test]
+    fn loopback_prefer_tries_plaintext_then_tls() {
+        use super::{Transport, connect_plan};
+        let plan = |url: &str| connect_plan(&effective_config(url).unwrap()).to_vec();
+        assert_eq!(
+            plan("postgres://u:p@localhost/t"),
+            vec![Transport::Plain, Transport::VerifiedTls]
+        );
+        assert_eq!(
+            plan("postgres://u:p@db.example/t"),
+            vec![Transport::VerifiedTls]
+        );
+        assert_eq!(
+            plan("postgres://u:p@localhost/t?sslmode=require"),
+            vec![Transport::VerifiedTls]
+        );
+        assert_eq!(
+            plan("postgres://u:p@db.example/t?sslmode=disable"),
+            vec![Transport::Plain]
         );
     }
 

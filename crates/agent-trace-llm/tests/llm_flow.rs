@@ -505,3 +505,41 @@ async fn tools_not_offered_to_a_role_are_denied() {
             .any(|e| e.kind == EventKind::ToolCallExecuted && e.name == "run_command_mock")
     );
 }
+
+// Regression: a tool call whose input was valid JSON but not an object was answered with an
+// error and never recorded, so a privileged request after injected content produced no
+// tool_call_requested event and no AT-002.
+#[tokio::test]
+async fn non_object_tool_input_is_recorded_and_gated() {
+    let (url, _captured) = fake_provider(vec![
+        json!({"model": "test-model", "choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": null,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read_document", "arguments": "{\"path\":\"injected-readme.md\"}"}}]}}]}),
+        json!({"model": "test-model", "choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "content": null,
+            "tool_calls": [{"id": "call_2", "type": "function", "function": {"name": "run_command_mock", "arguments": "\"echo MARKER\""}}]}}]}),
+        json!({"model": "test-model", "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "Done."}}]}),
+    ])
+    .await;
+    let scenario = lab().load_scenario("prompt-injection").unwrap();
+    let session = session().await;
+    let record = run_llm_scenario(
+        lab_recorder(&scenario, ExecutionMode::Live, false),
+        &scenario,
+        &session,
+        &client(ProviderKind::OpenAi, url),
+        &LlmRunOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        record
+            .events
+            .iter()
+            .any(|e| e.kind == EventKind::ToolCallRequested && e.name == "run_command_mock"),
+        "request not recorded"
+    );
+    let findings = Analyzer::default().analyze(&record, record.trace.created_at);
+    assert!(
+        findings.iter().any(|f| f.rule_id == "AT-002"),
+        "{findings:?}"
+    );
+}

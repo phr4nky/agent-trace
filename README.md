@@ -540,7 +540,9 @@ Guidelines for useful traces:
 4. Record your policy decisions as `tool_policy_decision` with `"decision":"deny"` and `"tool_state":"blocked"`, and record real executions as `tool_call_executed`.
 
 Import rejects malformed lines, unknown schema versions, duplicate IDs, gaps in `sequence`,
-dangling, forward or cyclic links (including context links), and oversized payloads, each with the line number.
+dangling, forward or cyclic links (including context links), files over 512 MiB and traces with more
+than 10 million JSON values, each with the line number. Strings over 16 KiB and payloads over 256 KiB
+are truncated with a marker (the content rules still see the full text).
 Full schema: [docs/event-schema.md](docs/event-schema.md).
 
 **Rust projects** can record directly with the crates:
@@ -559,7 +561,7 @@ Full schema: [docs/event-schema.md](docs/event-schema.md).
 | `AT-001` | Untrusted content contains instructions to change the agent's behavior (override task, call a tool, send data somewhere, hide it from the user, …) | `suspected` |
 | `AT-002` | A **privileged tool** was requested with an explicit causal path back to untrusted content (a trust-boundary crossing, including via a model's context) | `attempted` / `blocked` / `executed` |
 | `AT-003` | An outbound tool targets a **non-allowlisted destination** while sensitive (redacted) data is among its causes | `attempted` / `blocked` / `executed` |
-| `AT-004` | A tool call was **denied by policy** | `blocked` |
+| `AT-004` | A tool call was **denied by policy** (reported as `executed` if an execution was still recorded) | `blocked` / `executed` |
 | `AT-005` | Untrusted content **impersonates system/developer authority** ("SYSTEM:", `<system>`, "ignore previous instructions", …) | `suspected` |
 | `AT-006` | Untrusted content seen by **one agent** reached a privileged action of **another agent** (cross-agent taint) | `attempted` / `blocked` / `executed` |
 

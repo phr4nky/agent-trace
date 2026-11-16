@@ -39,6 +39,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "time",
+ "url",
  "uuid",
 ]
 
@@ -82,6 +83,7 @@ name = "agent-trace-storage"
 version = "1.1.0"
 dependencies = [
  "agent-trace-core",
+ "libc",
  "mysql",
  "postgres",
  "rusqlite",

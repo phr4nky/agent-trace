@@ -250,3 +250,118 @@ fn import_and_recorder_redact_agent_ids_and_names() {
     let r = TraceRecorder::new(format!("run with {token}"), ExecutionMode::Simulated);
     assert!(!r.trace().name.contains(token));
 }
+
+mod hunt_regressions {
+    use agent_trace_storage::{StorageError, read_jsonl};
+    use serde_json::json;
+    use std::error::Error as _;
+
+    const T: &str = "6f1c0d6e-0000-4000-8000-0000000000aa";
+
+    fn header() -> serde_json::Value {
+        json!({"record_type": "trace", "schema_version": "1.1", "trace_id": T, "name": "ext",
+            "created_at": "2026-11-16T09:00:00Z", "execution_mode": "live"})
+    }
+
+    fn event(seq: u64, id: &str, metadata: serde_json::Value) -> serde_json::Value {
+        json!({"record_type": "event", "schema_version": "1.1", "event_id": id, "trace_id": T,
+            "sequence": seq, "timestamp": "2026-11-16T09:00:01Z", "kind": "tool_result_received",
+            "parent_event_id": null, "caused_by_event_id": null, "origin": "mcp_tool",
+            "trust_level": "lower_trust", "name": "read_document", "payload": {"content": "x"},
+            "execution_mode": "live", "tool_state": null, "metadata": metadata})
+    }
+
+    fn lines(records: &[serde_json::Value]) -> String {
+        records.iter().map(|r| format!("{r}\n")).collect()
+    }
+
+    // Regression: import counted redactions in metadata in the total but not in the event's
+    // own count, so an event whose secret sat only in metadata was not sensitive (no AT-003),
+    // unlike the same event recorded natively.
+    #[test]
+    fn metadata_redactions_mark_the_event_sensitive() {
+        let meta = json!({"http": {"authorization": "Bearer abcdefghijklmnop1234"}});
+        let text = lines(&[
+            header(),
+            event(1, "6f1c0d6e-0000-4000-8000-000000000001", meta),
+        ]);
+        let imported = read_jsonl(text.as_bytes()).unwrap();
+        let e = &imported.record.events[0];
+        assert!(e.redaction_count() >= 1, "{:?}", e.metadata);
+        assert!(e.is_sensitive());
+    }
+
+    // Regression: README promises the line number for every import rejection, but the
+    // structural checks (duplicate id, sequence, links) only named an event id.
+    #[test]
+    fn validation_rejections_name_the_line() {
+        let id = "6f1c0d6e-0000-4000-8000-000000000001";
+        let text = lines(&[header(), event(1, id, json!({})), event(2, id, json!({}))]);
+        let err = read_jsonl(text.as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("line 3"), "{err}");
+        let text = lines(&[header(), event(5, id, json!({}))]);
+        let err = read_jsonl(text.as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("line 2"), "{err}");
+    }
+
+    // Regression: errors embedding their source in the message and also returning it as
+    // source() were printed twice by the CLI ("X: X").
+    #[test]
+    fn wrapped_errors_are_not_repeated_in_the_chain() {
+        let err = StorageError::from(std::io::Error::other("disk on fire"));
+        let mut chain = err.to_string();
+        let mut source = err.source();
+        while let Some(s) = source {
+            chain.push_str(&format!(": {s}"));
+            source = s.source();
+        }
+        assert_eq!(chain.matches("disk on fire").count(), 1, "{chain}");
+    }
+}
+
+mod hunt_storage_regressions {
+    use agent_trace_storage::Store;
+
+    // Regression: two commands opening the same fresh SQLite database at once failed
+    // ("database is locked" at the WAL switch, or "table already exists" when both ran the
+    // migrations), although opening a store is meant to be idempotent.
+    #[test]
+    fn concurrent_first_opens_of_a_fresh_store_succeed() {
+        for round in 0..10 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(format!("t{round}.sqlite3"));
+            let handles: Vec<_> = (0..6)
+                .map(|_| {
+                    let p = path.clone();
+                    std::thread::spawn(move || {
+                        Store::open(&p).map(|mut s| s.list_traces().map(|_| ()))
+                    })
+                })
+                .collect();
+            for h in handles {
+                let r = h.join().unwrap();
+                assert!(matches!(r, Ok(Ok(()))), "round {round}: {r:?}");
+            }
+        }
+    }
+
+    // Regression: opening a SQLite file chmodded its existing parent directory to 0700
+    // (a project or shared directory lost group/other access; /tmp failed with EPERM).
+    #[cfg(unix)]
+    #[test]
+    fn existing_parent_directories_keep_their_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Store::open(shared.join("traces.sqlite3")).unwrap();
+        let mode = std::fs::metadata(&shared).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
+        // A directory agent-trace creates itself is still private.
+        let fresh = dir.path().join("fresh");
+        Store::open(fresh.join("traces.sqlite3")).unwrap();
+        let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+    }
+}

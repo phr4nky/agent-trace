@@ -8,9 +8,14 @@
 use std::io::{BufRead, Read, Write};
 
 use agent_trace_core::rules::record_content_indicators;
-use agent_trace_core::{Event, Finding, Redactor, Trace, TraceRecord, validate};
+use std::collections::HashMap;
+
+use agent_trace_core::{
+    Event, Finding, RedactionReport, Redactor, Trace, TraceRecord, ValidationError, validate,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use uuid::Uuid;
 
 use crate::StorageError;
 
@@ -20,6 +25,9 @@ pub const MAX_LINE_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_EVENTS: usize = 100_000;
 /// Maximum total size of one imported file (lines and events alone would allow ~200 GB).
 pub const MAX_IMPORT_BYTES: u64 = 512 * 1024 * 1024;
+/// Maximum number of JSON values (after redaction) kept for one import. Parsed values take
+/// many times their text size in memory; this bounds the memory of a hostile import.
+pub const MAX_IMPORT_VALUES: usize = 10_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "record_type", rename_all = "snake_case")]
@@ -64,12 +72,21 @@ pub fn write_jsonl(
 
 /// Parse, redact and validate a JSONL trace.
 pub fn read_jsonl(input: impl Read) -> Result<Imported, StorageError> {
-    read_jsonl_limited(input, MAX_IMPORT_BYTES)
+    read_jsonl_limited(input, MAX_IMPORT_BYTES, MAX_IMPORT_VALUES)
 }
 
-fn read_jsonl_limited(input: impl Read, max_total: u64) -> Result<Imported, StorageError> {
+fn read_jsonl_limited(
+    input: impl Read,
+    max_total: u64,
+    max_values: usize,
+) -> Result<Imported, StorageError> {
     let mut reader = std::io::BufReader::new(input);
+    let redactor = Redactor::new();
     let mut total: u64 = 0;
+    let mut values = 0usize;
+    let mut redactions = 0u64;
+    let mut header_line = 0usize;
+    let mut event_lines: HashMap<Uuid, usize> = HashMap::new();
     let mut trace: Option<Trace> = None;
     let mut events = Vec::new();
     let mut ignored_findings = 0;
@@ -122,6 +139,7 @@ fn read_jsonl_limited(input: impl Read, max_total: u64) -> Result<Imported, Stor
                         message: "trace header must be the first record".into(),
                     });
                 }
+                header_line = line_no;
                 trace = Some(t);
             }
             JsonlRecord::Event(e) => {
@@ -137,6 +155,19 @@ fn read_jsonl_limited(input: impl Read, max_total: u64) -> Result<Imported, Stor
                         message: format!("more than {MAX_EVENTS} events"),
                     });
                 }
+                // Redact (and cap) each event as it is read: only the bounded, redacted
+                // copy is kept in memory.
+                let (e, n) = redact_event(&redactor, e);
+                redactions += n;
+                values +=
+                    count_values(&e.payload) + e.metadata.values().map(count_values).sum::<usize>();
+                if values > max_values {
+                    return Err(StorageError::Import {
+                        line: line_no,
+                        message: format!("trace has more than {max_values} JSON values"),
+                    });
+                }
+                event_lines.insert(e.event_id, line_no);
                 events.push(e);
             }
             JsonlRecord::Finding(_) => ignored_findings += 1,
@@ -146,8 +177,32 @@ fn read_jsonl_limited(input: impl Read, max_total: u64) -> Result<Imported, Stor
         line: line_no,
         message: "no trace header found (empty file?)".into(),
     })?;
-    let (record, redactions) = redact_record(&TraceRecord { trace, events });
-    validate(&record)?;
+    let (trace, n) = redact_trace(&redactor, trace);
+    redactions += n;
+    let record = TraceRecord { trace, events };
+    if let Err(e) = validate(&record) {
+        let line = match &e {
+            ValidationError::UnsupportedSchema { found, .. } => {
+                if record.trace.schema_version == *found {
+                    Some(header_line)
+                } else {
+                    record
+                        .events
+                        .iter()
+                        .find(|ev| ev.schema_version == *found)
+                        .and_then(|ev| event_lines.get(&ev.event_id).copied())
+                }
+            }
+            other => validation_event(other).and_then(|id| event_lines.get(&id).copied()),
+        };
+        return Err(match line {
+            Some(line) => StorageError::Import {
+                line,
+                message: format!("invalid trace: {e}"),
+            },
+            None => StorageError::Invalid(e),
+        });
+    }
     Ok(Imported {
         record,
         ignored_findings,
@@ -193,44 +248,81 @@ pub fn write_json_report(
     Ok(())
 }
 
+/// The event a validation error is about.
+fn validation_event(e: &ValidationError) -> Option<Uuid> {
+    match e {
+        ValidationError::ForeignEvent { event_id, .. }
+        | ValidationError::BadSequence { event_id, .. }
+        | ValidationError::DanglingLink { event_id, .. }
+        | ValidationError::SelfLink { event_id }
+        | ValidationError::ForwardLink { event_id, .. }
+        | ValidationError::PayloadTooLarge { event_id, .. } => Some(*event_id),
+        ValidationError::DuplicateEventId(id) | ValidationError::Cycle(id) => Some(*id),
+        ValidationError::UnsupportedSchema { .. } => None,
+    }
+}
+
+/// Number of JSON values in `v` (itself included).
+fn count_values(v: &Value) -> usize {
+    1 + match v {
+        Value::Array(items) => items.iter().map(count_values).sum(),
+        Value::Object(map) => map.values().map(count_values).sum(),
+        _ => 0,
+    }
+}
+
+fn redact_map(redactor: &Redactor, m: Map<String, Value>) -> (Map<String, Value>, RedactionReport) {
+    let (v, r) = redactor.redact_value(&Value::Object(m));
+    match v {
+        Value::Object(m) => (m, r),
+        _ => (Map::new(), r),
+    }
+}
+
+/// Redact one event like the recorder does: payload, metadata (both counted in
+/// `metadata.redactions`), name and agent id. Returns the number of new redactions.
+fn redact_event(redactor: &Redactor, mut e: Event) -> (Event, u64) {
+    let (mut metadata, meta) = redact_map(redactor, std::mem::take(&mut e.metadata));
+    let (payload, pay) = redactor.redact_value(&e.payload);
+    let added = pay.redactions.saturating_add(meta.redactions);
+    if added > 0 {
+        let prev = metadata
+            .get("redactions")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        metadata.insert("redactions".into(), Value::from(prev.saturating_add(added)));
+    }
+    if pay.truncated || meta.truncated {
+        metadata.insert("truncated".into(), Value::Bool(true));
+    }
+    if pay.truncated {
+        // Rules only see the stored (cut) payload; keep what the original contained.
+        record_content_indicators(&mut metadata, &e.payload);
+    }
+    e.payload = payload;
+    e.metadata = metadata;
+    e.name = redactor.scrub(&e.name);
+    e.agent_id = e.agent_id.as_deref().map(|a| redactor.scrub(a));
+    (e, added)
+}
+
+fn redact_trace(redactor: &Redactor, mut trace: Trace) -> (Trace, u64) {
+    let (metadata, r) = redact_map(redactor, std::mem::take(&mut trace.metadata));
+    trace.metadata = metadata;
+    trace.name = redactor.scrub(&trace.name);
+    (trace, r.redactions)
+}
+
 /// Apply the shared redactor to every payload, metadata map and name of a trace.
 pub fn redact_record(record: &TraceRecord) -> (TraceRecord, u64) {
     let redactor = Redactor::new();
-    let mut total = 0;
-    let redact_map = |m: &Map<String, Value>, total: &mut u64| -> Map<String, Value> {
-        let (v, r) = redactor.redact_value(&Value::Object(m.clone()));
-        *total += r.redactions;
-        match v {
-            Value::Object(m) => m,
-            _ => Map::new(),
-        }
-    };
-    let mut trace = record.trace.clone();
-    trace.metadata = redact_map(&trace.metadata, &mut total);
+    let (trace, mut total) = redact_trace(&redactor, record.trace.clone());
     let mut events = Vec::with_capacity(record.events.len());
     for event in &record.events {
-        let mut e = event.clone();
-        e.metadata = redact_map(&e.metadata, &mut total);
-        let (payload, r) = redactor.redact_value(&e.payload);
-        total += r.redactions;
-        if r.redactions > 0 {
-            let prev = e.redaction_count();
-            e.metadata.insert(
-                "redactions".into(),
-                Value::from(prev.saturating_add(r.redactions)),
-            );
-        }
-        if r.truncated {
-            e.metadata.insert("truncated".into(), Value::Bool(true));
-            // Rules only see the stored (cut) payload; keep what the original contained.
-            record_content_indicators(&mut e.metadata, &event.payload);
-        }
-        e.payload = payload;
-        e.name = redactor.scrub(&e.name);
-        e.agent_id = e.agent_id.as_deref().map(|a| redactor.scrub(a));
+        let (e, n) = redact_event(&redactor, event.clone());
+        total += n;
         events.push(e);
     }
-    trace.name = redactor.scrub(&trace.name);
     (TraceRecord { trace, events }, total)
 }
 
@@ -243,7 +335,30 @@ mod tests {
     fn total_import_size_is_limited() {
         let line = format!("{}\n", " ".repeat(1000));
         let input = line.repeat(20);
-        let err = read_jsonl_limited(input.as_bytes(), 10_000).unwrap_err();
+        let err = read_jsonl_limited(input.as_bytes(), 10_000, MAX_IMPORT_VALUES).unwrap_err();
         assert!(err.to_string().contains("exceeds 10000 bytes"), "{err}");
+    }
+
+    // Regression: parsed values take ~30x their text size, so a 512 MiB file could need
+    // ~17 GB. The number of retained JSON values is capped.
+    #[test]
+    fn retained_json_values_are_capped() {
+        let trace_id = "6f1c0d6e-0000-4000-8000-0000000000bb";
+        let header = serde_json::json!({"record_type": "trace", "schema_version": "1.1",
+            "trace_id": trace_id, "name": "n", "created_at": "2026-11-16T09:00:00Z",
+            "execution_mode": "live"});
+        let event = serde_json::json!({"record_type": "event", "schema_version": "1.1",
+            "event_id": "6f1c0d6e-0000-4000-8000-000000000001", "trace_id": trace_id,
+            "sequence": 1, "timestamp": "2026-11-16T09:00:01Z", "kind": "agent_decision",
+            "parent_event_id": null, "caused_by_event_id": null, "origin": "agent",
+            "trust_level": "unknown", "name": "d", "payload": {"xs": vec![0; 5000]},
+            "execution_mode": "live", "tool_state": null, "metadata": {}});
+        let input = format!("{header}\n{event}\n");
+        let err = read_jsonl_limited(input.as_bytes(), MAX_IMPORT_BYTES, 1000).unwrap_err();
+        assert!(
+            err.to_string().contains("more than 1000 JSON values"),
+            "{err}"
+        );
+        assert!(read_jsonl_limited(input.as_bytes(), MAX_IMPORT_BYTES, 10_000).is_ok());
     }
 }
