@@ -6,6 +6,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+/// Argument names that carry where an outbound tool sends data.
+pub const DESTINATION_KEYS: &[&str] = &[
+    "destination",
+    "url",
+    "uri",
+    "endpoint",
+    "webhook_url",
+    "to",
+    "recipient",
+    "recipients",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolPolicy {
     /// Tools that change state or act with the agent's privileges.
@@ -69,6 +81,31 @@ impl ToolPolicy {
         self.outbound_tools.iter().any(|t| t == tool)
     }
 
+    /// The first destination argument of an outbound call that is not allowlisted.
+    /// Every destination-like argument is checked, because the tool may use any of them;
+    /// a call without a readable destination is reported as disallowed (empty string).
+    pub fn disallowed_destination(&self, arguments: &Map<String, Value>) -> Option<String> {
+        let mut found = false;
+        for key in DESTINATION_KEYS {
+            let Some(value) = arguments.get(*key) else {
+                continue;
+            };
+            let values: Vec<&Value> = match value {
+                Value::Array(items) => items.iter().collect(),
+                other => vec![other],
+            };
+            for v in values {
+                found = true;
+                match v.as_str() {
+                    Some(d) if self.destination_allowed(d) => {}
+                    Some(d) => return Some(d.to_owned()),
+                    None => return Some(String::new()),
+                }
+            }
+        }
+        (!found).then(String::new)
+    }
+
     pub fn destination_allowed(&self, destination: &str) -> bool {
         host_of(destination).is_some_and(|host| {
             self.destination_allowlist
@@ -80,17 +117,12 @@ impl ToolPolicy {
     /// Evaluate a tool request. Outbound tools are denied unless the destination is allowlisted.
     pub fn evaluate(&self, tool: &str, arguments: &Map<String, Value>) -> PolicyOutcome {
         if self.is_outbound(tool) {
-            let destination = arguments
-                .get("destination")
-                .or_else(|| arguments.get("url"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if !self.destination_allowed(destination) {
+            if let Some(destination) = self.disallowed_destination(arguments) {
                 return PolicyOutcome {
                     decision: Decision::Deny,
                     reason: format!(
                         "outbound destination host {:?} is not on the allowlist",
-                        host_of(destination).unwrap_or_default()
+                        host_of(&destination).unwrap_or_default()
                     ),
                 };
             }
@@ -114,12 +146,22 @@ impl ToolPolicy {
 }
 
 /// Extract the host of a URL-like destination without any network resolution.
+///
+/// The authority ends at `/`, `\\`, `?` or `#`, as in WHATWG URL parsing for http(s), so the
+/// host agrees with what real HTTP clients connect to. Authorities containing whitespace or
+/// control characters are ambiguous between parsers and yield `None` (callers deny).
 pub fn host_of(destination: &str) -> Option<String> {
     let rest = destination
         .split_once("://")
         .map(|(_, r)| r)
         .unwrap_or(destination);
-    let authority = rest.split(['/', '?', '#']).next()?;
+    let authority = rest.split(['/', '\\', '?', '#']).next()?;
+    if authority
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return None;
+    }
     let authority = authority
         .rsplit_once('@')
         .map(|(_, h)| h)
@@ -149,6 +191,50 @@ mod tests {
         );
         assert_eq!(host_of("http://[::1]:80/").as_deref(), Some("::1"));
         assert_eq!(host_of(""), None);
+    }
+
+    // Regression: WHATWG parsers (browsers, Node, the `url` crate behind reqwest) end the
+    // authority at a backslash for http(s), so `http://evil\\@localhost/` goes to `evil`.
+    #[test]
+    fn host_parsing_matches_real_clients_on_ambiguous_input() {
+        assert_eq!(
+            host_of("https://marker.invalid\\@localhost/x").as_deref(),
+            Some("marker.invalid")
+        );
+        assert_eq!(
+            host_of("http://marker.invalid/@localhost").as_deref(),
+            Some("marker.invalid")
+        );
+        assert_eq!(
+            host_of("http://localhost@marker.invalid/").as_deref(),
+            Some("marker.invalid")
+        );
+        // Whitespace or control characters in the authority: no host, so outbound is denied.
+        assert_eq!(host_of("http://marker.invalid\t@localhost/"), None);
+        assert_eq!(host_of("http://local host/"), None);
+        let p = ToolPolicy::default();
+        assert!(!p.destination_allowed("https://marker.invalid\\@localhost/x"));
+        assert!(!p.destination_allowed("http://marker.invalid\t@localhost/"));
+    }
+
+    // Regression: a request carrying an allowlisted `destination` and a different `url`
+    // was judged only on `destination`.
+    #[test]
+    fn every_destination_argument_must_be_allowlisted() {
+        let p = ToolPolicy::default();
+        for args in [
+            json!({"destination": "http://localhost/", "url": "https://marker.invalid/x"}),
+            json!({"url": "http://localhost/", "endpoint": "https://marker.invalid/x"}),
+            json!({"to": ["ops@localhost", "someone@marker.invalid"]}),
+            json!({"destination": 42}),
+            json!({}),
+        ] {
+            let out = p.evaluate("http_request", args.as_object().unwrap());
+            assert_eq!(out.decision, Decision::Deny, "{args}");
+        }
+        let args = json!({"destination": "http://localhost/", "url": "http://127.0.0.1:8080/"});
+        let out = p.evaluate("http_request", args.as_object().unwrap());
+        assert_eq!(out.decision, Decision::Allow);
     }
 
     #[test]

