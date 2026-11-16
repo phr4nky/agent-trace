@@ -258,6 +258,9 @@ stored, logged or written to a trace, and error messages are redacted.
 | Endpoint | `--base-url` or `ANTHROPIC_BASE_URL` | `--base-url` or `OPENAI_BASE_URL` (default `https://api.openai.com/v1`) |
 | Turn limit | `--max-turns` (default 8) | same |
 
+An API key is only sent over `https://`, or over plain `http://` to localhost. Redirects from
+the endpoint are not followed, and responses larger than 16 MiB are rejected.
+
 ---
 
 ## How it works
