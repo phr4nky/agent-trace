@@ -644,3 +644,40 @@ fn plain_output_neutralizes_control_characters() {
         );
     }
 }
+
+// The CI verdict can come straight from the validated import (no `--latest`, no second read
+// of a possibly shared database), and from a demo run for model regression checks.
+#[test]
+fn import_and_demo_fail_on_threshold() {
+    let input = repo().join("examples/ci/minimal-trace.jsonl");
+    // Fresh store per call: a trace id can only be imported once.
+    let code = |args: &[&str]| {
+        let data = tempfile::tempdir().unwrap();
+        bin(data.path(), args).status.code()
+    };
+    let path = input.to_str().unwrap();
+    assert_eq!(
+        code(&["import", "--input", path, "--fail-on", "high"]),
+        Some(2)
+    );
+    assert_eq!(
+        code(&["import", "--input", path, "--fail-on", "critical"]),
+        Some(0)
+    );
+    assert_eq!(code(&["import", "--input", path]), Some(0));
+    assert_eq!(
+        code(&[
+            "demo",
+            "run",
+            "--scenario",
+            "exfil-attempt",
+            "--fail-on",
+            "high"
+        ]),
+        Some(2)
+    );
+    assert_eq!(
+        code(&["demo", "run", "--scenario", "benign", "--fail-on", "high"]),
+        Some(0)
+    );
+}

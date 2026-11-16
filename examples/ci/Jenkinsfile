@@ -27,11 +27,12 @@ pipeline {
     environment {
         AGENT_TRACE_VERSION = 'v1.0.0'
         AGENT_TRACE_URL     = 'https://github.com/phr4nky/agent-trace'
-        AGENT_TRACE_HOME    = "${WORKSPACE}/.agent-trace/bin"
+        // Per build: a binary left in the workspace by an earlier (untrusted) build is never reused.
+        AGENT_TRACE_HOME    = "${WORKSPACE}/.agent-trace/bin-${BUILD_NUMBER}"
         // Per-build SQLite store inside the workspace (ignored by .gitignore). For history
         // across builds, set AGENT_TRACE_DATABASE_URL from a credential instead (see the docs).
         AGENT_TRACE_DATA_DIR = "${WORKSPACE}/.agent-trace/data-${BUILD_NUMBER}"
-        PATH = "${WORKSPACE}/.agent-trace/bin:${PATH}"
+        PATH = "${WORKSPACE}/.agent-trace/bin-${BUILD_NUMBER}:${PATH}"
     }
 
     stages {
@@ -41,11 +42,10 @@ pipeline {
                     set -eu
                     target=x86_64-unknown-linux-gnu
                     name="agent-trace-${AGENT_TRACE_VERSION}-${target}"
-                    if [ ! -x "$AGENT_TRACE_HOME/agent-trace" ]; then
-                        mkdir -p "$AGENT_TRACE_HOME"
-                        curl -fsSL "${AGENT_TRACE_URL}/releases/download/${AGENT_TRACE_VERSION}/${name}.tar.gz" \
-                            | tar -xz -C "$AGENT_TRACE_HOME" --strip-components=1
-                    fi
+                    rm -rf "$AGENT_TRACE_HOME"
+                    mkdir -p "$AGENT_TRACE_HOME"
+                    curl -fsSL "${AGENT_TRACE_URL}/releases/download/${AGENT_TRACE_VERSION}/${name}.tar.gz" \
+                        | tar -xz -C "$AGENT_TRACE_HOME" --strip-components=1
                     agent-trace --version
                 '''
             }
@@ -80,19 +80,28 @@ pipeline {
         }
 
         stage('Model regression check') {
-            when { expression { params.MODEL_CHECK } }
+            // Never on pull requests: their code ran in earlier stages of this workspace and
+            // could have replaced the tools this stage runs while the key is in the environment.
+            when {
+                allOf {
+                    expression { params.MODEL_CHECK }
+                    not { changeRequest() }
+                }
+            }
             steps {
                 withCredentials([string(credentialsId: 'openai-api-key', variable: 'OPENAI_API_KEY')]) {
-                    // Single quotes: the key is expanded by the shell, never by Groovy,
-                    // so it does not end up in the build log or the pipeline script.
-                    sh '''
-                        set -eu
-                        agent-trace --no-color demo run --provider openai --model gpt-5.4-mini --scenario exfil-attempt
-                        agent-trace --no-color export --latest --format jsonl --output reports/model-exfil-attempt.jsonl
-                    '''
                     script {
-                        def code = sh(returnStatus: true,
-                                      script: 'agent-trace --no-color analyze --latest --fail-on high')
+                        // Single quotes: the key is expanded by the shell, never by Groovy, so it
+                        // does not end up in the build log or the pipeline script. The verdict
+                        // comes from the run itself (`--fail-on`), not from `--latest`.
+                        def code = sh(returnStatus: true, script: '''
+                            agent-trace --no-color demo run --provider openai --model gpt-5.4-mini \
+                                --scenario exfil-attempt --fail-on high > reports/model-exfil-attempt.txt 2>&1
+                            code=$?
+                            cat reports/model-exfil-attempt.txt
+                            cp "$AGENT_TRACE_DATA_DIR"/exports/exfil-attempt-*.jsonl reports/ 2>/dev/null || true
+                            exit $code
+                        ''')
                         if (code == 2) {
                             unstable('agent-trace: the model attempted the exfiltration in the lab scenario')
                         } else if (code != 0) {
@@ -109,8 +118,8 @@ pipeline {
             archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true, fingerprint: true
         }
         cleanup {
-            // Drop the per-build store; the downloaded binary in .agent-trace/bin is kept as a cache.
-            sh 'rm -rf "$AGENT_TRACE_DATA_DIR"'
+            // Drop the per-build store and binary.
+            sh 'rm -rf "$AGENT_TRACE_DATA_DIR" "$AGENT_TRACE_HOME"'
         }
     }
 }
