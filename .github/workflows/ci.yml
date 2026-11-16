@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: fmt · clippy · test · build · demo (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Build release
+        run: cargo build --workspace --release --locked
+      - name: Demo (all scenarios, fresh data dir)
+        shell: bash
+        run: |
+          cargo run -p agent-trace-cli --locked -- --no-color --data-dir "$RUNNER_TEMP/agent-trace" demo run --scenario all
+          cargo run -p agent-trace-cli --locked -- --no-color --data-dir "$RUNNER_TEMP/agent-trace" trace list
+          cargo run -p agent-trace-cli --locked -- --no-color --data-dir "$RUNNER_TEMP/agent-trace" analyze --latest
+
+  databases:
+    name: storage backends (PostgreSQL, MariaDB, MySQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: pw
+          POSTGRES_DB: agent_trace
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: pw
+          MARIADB_DATABASE: agent_trace
+        ports: ["53306:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect" --health-interval 2s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: pw
+          MYSQL_DATABASE: agent_trace
+        ports: ["53307:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ppw" --health-interval 2s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: PostgreSQL
+        env:
+          AGENT_TRACE_TEST_POSTGRES_URL: postgres://postgres:pw@127.0.0.1:55432/agent_trace
+        run: cargo test --locked -p agent-trace-storage -p agent-trace-cli -- conformance external_databases
+      - name: MariaDB
+        env:
+          AGENT_TRACE_TEST_MYSQL_URL: mariadb://root:pw@127.0.0.1:53306/agent_trace
+        run: cargo test --locked -p agent-trace-storage -p agent-trace-cli -- conformance external_databases
+      - name: MySQL
+        env:
+          AGENT_TRACE_TEST_MYSQL_URL: mysql://root:pw@127.0.0.1:53307/agent_trace
+        run: cargo test --locked -p agent-trace-storage -p agent-trace-cli -- conformance external_databases

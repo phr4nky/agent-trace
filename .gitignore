@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+/.agent-trace/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.DS_Store
+/reports/

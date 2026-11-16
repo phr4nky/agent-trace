@@ -1,0 +1,108 @@
+{
+  "description": "Golden expectations for the local lab. Checked by crates/agent-trace-cli/tests/demo_smoke.rs. Each entry lists the exact set of (rule_id, attempt_status) pairs.",
+  "scenarios": {
+    "benign": {
+      "findings": [],
+      "max_severity_below": "medium"
+    },
+    "prompt-injection": {
+      "findings": [
+        {
+          "rule_id": "AT-001",
+          "attempt_status": "suspected",
+          "evidence_kinds": [
+            "tool_result_received"
+          ]
+        },
+        {
+          "rule_id": "AT-002",
+          "attempt_status": "executed",
+          "evidence_kinds": [
+            "tool_result_received",
+            "agent_decision",
+            "tool_call_requested",
+            "tool_call_executed"
+          ]
+        }
+      ]
+    },
+    "exfil-attempt": {
+      "findings": [
+        {
+          "rule_id": "AT-001",
+          "attempt_status": "suspected",
+          "evidence_kinds": [
+            "tool_result_received"
+          ]
+        },
+        {
+          "rule_id": "AT-002",
+          "attempt_status": "blocked",
+          "evidence_kinds": [
+            "tool_result_received",
+            "agent_decision",
+            "tool_call_requested",
+            "tool_policy_decision"
+          ]
+        },
+        {
+          "rule_id": "AT-003",
+          "attempt_status": "blocked",
+          "evidence_kinds": [
+            "tool_result_received",
+            "tool_call_requested",
+            "tool_policy_decision"
+          ]
+        },
+        {
+          "rule_id": "AT-004",
+          "attempt_status": "blocked",
+          "evidence_kinds": [
+            "tool_call_requested",
+            "tool_policy_decision"
+          ]
+        }
+      ]
+    },
+    "multi-agent-handoff": {
+      "findings": [
+        {
+          "rule_id": "AT-001",
+          "attempt_status": "suspected",
+          "evidence_kinds": [
+            "tool_result_received"
+          ]
+        },
+        {
+          "rule_id": "AT-001",
+          "attempt_status": "suspected",
+          "evidence_kinds": [
+            "agent_message_received"
+          ]
+        },
+        {
+          "rule_id": "AT-002",
+          "attempt_status": "executed",
+          "evidence_kinds": [
+            "agent_message_received",
+            "agent_decision",
+            "tool_call_requested",
+            "tool_call_executed"
+          ]
+        },
+        {
+          "rule_id": "AT-006",
+          "attempt_status": "executed",
+          "evidence_kinds": [
+            "tool_result_received",
+            "agent_message_sent",
+            "agent_message_received",
+            "agent_decision",
+            "tool_call_requested",
+            "tool_call_executed"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,116 @@
+// agent-trace in Jenkins: fail (or mark unstable) a build when an agent's traces contain
+// security findings. See docs/ci-jenkins.md for the walkthrough.
+//
+// Requirements: a Linux agent with curl and tar (or Docker, see the `agent` block),
+// plus the Pipeline plugin. Credentials are only needed for the optional model check.
+
+pipeline {
+    agent { label 'linux' }
+    // Alternative without a preinstalled agent: build inside a container.
+    // agent { docker { image 'buildpack-deps:bookworm-curl' } }
+
+    options {
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '30'))
+    }
+
+    parameters {
+        choice(name: 'FAIL_ON', choices: ['high', 'medium', 'low'],
+               description: 'Lowest finding severity that counts as a failure')
+        choice(name: 'ON_FINDINGS', choices: ['FAILURE', 'UNSTABLE'],
+               description: 'Build result when findings reach the threshold')
+        booleanParam(name: 'MODEL_CHECK', defaultValue: false,
+                     description: 'Also run the lab scenarios against a real model (needs the openai-api-key credential)')
+    }
+
+    environment {
+        AGENT_TRACE_VERSION = 'v1.0.0'
+        AGENT_TRACE_URL     = 'https://github.com/phr4nky/agent-trace'
+        AGENT_TRACE_HOME    = "${WORKSPACE}/.agent-trace/bin"
+        // Per-build SQLite store inside the workspace (ignored by .gitignore). For history
+        // across builds, set AGENT_TRACE_DATABASE_URL from a credential instead (see the docs).
+        AGENT_TRACE_DATA_DIR = "${WORKSPACE}/.agent-trace/data-${BUILD_NUMBER}"
+        PATH = "${WORKSPACE}/.agent-trace/bin:${PATH}"
+    }
+
+    stages {
+        stage('Install agent-trace') {
+            steps {
+                sh '''
+                    set -eu
+                    target=x86_64-unknown-linux-gnu
+                    name="agent-trace-${AGENT_TRACE_VERSION}-${target}"
+                    if [ ! -x "$AGENT_TRACE_HOME/agent-trace" ]; then
+                        mkdir -p "$AGENT_TRACE_HOME"
+                        curl -fsSL "${AGENT_TRACE_URL}/releases/download/${AGENT_TRACE_VERSION}/${name}.tar.gz" \
+                            | tar -xz -C "$AGENT_TRACE_HOME" --strip-components=1
+                    fi
+                    agent-trace --version
+                '''
+            }
+        }
+
+        stage('Agent tests') {
+            steps {
+                // Your agent's integration tests; they write one JSONL trace per run into traces/.
+                sh './scripts/run-agent-tests.sh'
+            }
+        }
+
+        stage('agent-trace gate') {
+            steps {
+                script {
+                    def code = sh(
+                        returnStatus: true,
+                        script: 'sh "$AGENT_TRACE_HOME/examples/ci/agent-trace-gate.sh" traces reports "$FAIL_ON"'
+                    )
+                    if (code == 2) {
+                        def msg = "agent-trace: findings at or above ${params.FAIL_ON} (see reports/)"
+                        if (params.ON_FINDINGS == 'UNSTABLE') {
+                            unstable(msg)
+                        } else {
+                            error(msg)
+                        }
+                    } else if (code != 0) {
+                        error("agent-trace gate failed with exit code ${code} (invalid trace or setup problem)")
+                    }
+                }
+            }
+        }
+
+        stage('Model regression check') {
+            when { expression { params.MODEL_CHECK } }
+            steps {
+                withCredentials([string(credentialsId: 'openai-api-key', variable: 'OPENAI_API_KEY')]) {
+                    // Single quotes: the key is expanded by the shell, never by Groovy,
+                    // so it does not end up in the build log or the pipeline script.
+                    sh '''
+                        set -eu
+                        agent-trace --no-color demo run --provider openai --model gpt-5.4-mini --scenario exfil-attempt
+                        agent-trace --no-color export --latest --format jsonl --output reports/model-exfil-attempt.jsonl
+                    '''
+                    script {
+                        def code = sh(returnStatus: true,
+                                      script: 'agent-trace --no-color analyze --latest --fail-on high')
+                        if (code == 2) {
+                            unstable('agent-trace: the model attempted the exfiltration in the lab scenario')
+                        } else if (code != 0) {
+                            error("model check failed with exit code ${code}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true, fingerprint: true
+        }
+        cleanup {
+            // Drop the per-build store; the downloaded binary in .agent-trace/bin is kept as a cache.
+            sh 'rm -rf "$AGENT_TRACE_DATA_DIR"'
+        }
+    }
+}

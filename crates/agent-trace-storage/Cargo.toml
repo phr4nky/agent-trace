@@ -1,0 +1,33 @@
+[package]
+name = "agent-trace-storage"
+description = "SQLite storage and JSONL/JSON import-export for agent-trace."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = ["postgres", "mysql"]
+postgres = ["dep:postgres", "dep:tokio-postgres-rustls", "dep:rustls"]
+mysql = ["dep:mysql", "dep:rustls"]
+
+[dependencies]
+agent-trace-core.workspace = true
+mysql = { workspace = true, optional = true }
+postgres = { workspace = true, optional = true }
+rusqlite.workspace = true
+rustls = { workspace = true, optional = true }
+tokio-postgres-rustls = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

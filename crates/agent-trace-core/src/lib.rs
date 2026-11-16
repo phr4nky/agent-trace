@@ -1,0 +1,22 @@
+//! `agent-trace-core`: event model, provenance, redaction, policy and rules.
+//!
+//! This crate is intentionally independent of AI vendors, MCP SDKs and UIs.
+
+pub mod event;
+pub mod finding;
+pub mod policy;
+pub mod provenance;
+pub mod recorder;
+pub mod redact;
+pub mod rules;
+
+pub use event::{
+    DEFAULT_AGENT, Event, EventKind, ExecutionMode, Origin, SCHEMA_VERSION, ToolState, Trace,
+    TraceRecord, TraceStatus, TrustLevel,
+};
+pub use finding::{AttemptStatus, Confidence, Finding, Severity};
+pub use policy::{Decision, PolicyOutcome, ToolPolicy};
+pub use provenance::{TraceIndex, ValidationError, validate};
+pub use recorder::{EventSpec, RecorderEvent, TraceRecorder};
+pub use redact::{RedactionReport, Redactor};
+pub use rules::{Analyzer, Rule};

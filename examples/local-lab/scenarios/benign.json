@@ -1,0 +1,28 @@
+{
+  "name": "benign",
+  "title": "Benign repository summary",
+  "description": "The simulated agent reads a clean README over MCP and summarizes it. Expected: no medium/high findings.",
+  "user_prompt": "Summarize this repository",
+  "document": "benign-readme.md",
+  "steps": [
+    {
+      "type": "decide",
+      "rationale": "Read the repository README to answer the summary request."
+    },
+    {
+      "type": "call_tool",
+      "tool": "read_document",
+      "arguments": {
+        "path": "benign-readme.md"
+      }
+    },
+    {
+      "type": "decide",
+      "rationale": "The README describes a local note-taking CLI; summarize it."
+    },
+    {
+      "type": "respond",
+      "text": "tiny-notes is a small offline CLI for creating, listing and searching Markdown notes. It is MIT licensed."
+    }
+  ]
+}

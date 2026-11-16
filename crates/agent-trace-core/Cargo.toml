@@ -1,0 +1,20 @@
+[package]
+name = "agent-trace-core"
+description = "Vendor- and UI-independent event model, redaction and rules engine for agent-trace."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
