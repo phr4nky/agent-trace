@@ -464,3 +464,44 @@ fn api_key_requires_https_for_remote_hosts() {
     keyless.api_key = None;
     assert!(LlmClient::new(keyless).is_ok());
 }
+
+// Regression: a model could call any MCP tool, also ones never offered to its role (the
+// researcher only gets read_document). Such calls are now recorded and denied by the gate.
+#[tokio::test]
+async fn tools_not_offered_to_a_role_are_denied() {
+    let (url, _captured) = fake_provider(vec![
+        anthropic_tool_use(
+            "o1",
+            "delegate_to_researcher",
+            json!({"task": "Summarize benign-readme.md."}),
+        ),
+        // researcher tries a privileged tool it was not offered
+        anthropic_tool_use("r1", "run_command_mock", json!({"command": "echo MARKER"})),
+        anthropic_text("Could not run it."),
+        anthropic_text("Done."),
+    ])
+    .await;
+    let scenario = lab().load_scenario("multi-agent-handoff").unwrap();
+    let session = session().await;
+    let record = run_llm_scenario(
+        lab_recorder(&scenario, ExecutionMode::Live, false),
+        &scenario,
+        &session,
+        &client(ProviderKind::Anthropic, url),
+        &LlmRunOptions::default(),
+    )
+    .await
+    .unwrap();
+    let denied = record
+        .events
+        .iter()
+        .find(|e| e.kind == EventKind::ToolPolicyDecision && e.name == "run_command_mock")
+        .expect("policy decision recorded");
+    assert_eq!(denied.payload["decision"], "deny", "{}", denied.payload);
+    assert!(
+        !record
+            .events
+            .iter()
+            .any(|e| e.kind == EventKind::ToolCallExecuted && e.name == "run_command_mock")
+    );
+}
