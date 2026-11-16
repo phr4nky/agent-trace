@@ -119,6 +119,18 @@ fn conformance(mut store: Store) {
     assert_eq!(sa.finding_count, f1.len() as u64);
     assert_eq!(sa.max_severity, Some(agent_trace_core::Severity::High));
 
+    // NUL in names: PostgreSQL rejects it in TEXT columns; the round trip stays lossless.
+    let mut r = TraceRecorder::new("conformance/nul\0name", ExecutionMode::Simulated);
+    r.record(EventSpec::new(
+        EventKind::AgentDecision,
+        Origin::Agent,
+        TrustLevel::Unknown,
+        "tool\0name",
+    ));
+    let c = r.finish();
+    store.insert_trace(&c, TraceSource::Recorded).unwrap();
+    assert_eq!(store.load_trace(c.trace.trace_id).unwrap(), c);
+
     // Secrets never stored.
     let raw = format!("{:?}", store.load_trace(a.trace.trace_id).unwrap());
     assert!(!raw.contains("FAKE_SECRET_FOR_TESTING_ONLY"));
@@ -130,7 +142,7 @@ fn sqlite_conformance() {
     conformance(Store::open(dir.path().join("t.sqlite3")).unwrap());
     // Reopening runs no migration twice.
     let mut again = Store::open(dir.path().join("t.sqlite3")).unwrap();
-    assert_eq!(again.list_traces().unwrap().len(), 2);
+    assert_eq!(again.list_traces().unwrap().len(), 3);
 }
 
 fn external(var: &str) {

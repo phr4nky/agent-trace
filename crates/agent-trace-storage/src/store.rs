@@ -597,8 +597,22 @@ fn duplicate_or(e: StorageError, trace_id: Uuid) -> StorageError {
     }
 }
 
+/// Value for an indexed name column. NUL is dropped (PostgreSQL rejects it in TEXT and the
+/// insert would fail, stopping live recording); the full value stays in the JSON body.
 fn column_text(s: &str) -> String {
-    s.chars().take(NAME_COLUMN_CHARS).collect()
+    s.chars()
+        .filter(|c| *c != '\0')
+        .take(NAME_COLUMN_CHARS)
+        .collect()
+}
+
+#[cfg(test)]
+mod column_tests {
+    // Regression: a NUL in a model-chosen tool name made the PostgreSQL insert fail.
+    #[test]
+    fn column_text_drops_nul() {
+        assert_eq!(super::column_text("run\0_command"), "run_command");
+    }
 }
 
 fn severity_from_rank(rank: i64) -> Option<Severity> {
