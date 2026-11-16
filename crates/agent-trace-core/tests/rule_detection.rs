@@ -666,8 +666,10 @@ fn long_causal_chains_are_analyzed_in_linear_time() {
     let start = std::time::Instant::now();
     let f = Analyzer::default().analyze(&rec, rec.trace.created_at);
     let elapsed = start.elapsed();
+    // Generous for slow CI runners and debug builds: the quadratic version needed more
+    // than six minutes for this chain even in a release build.
     assert!(
-        elapsed < std::time::Duration::from_secs(10),
+        elapsed < std::time::Duration::from_secs(60),
         "took {elapsed:?}"
     );
     assert_eq!(f.iter().filter(|f| f.rule_id == "AT-002").count(), n);
