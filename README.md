@@ -115,7 +115,7 @@ $ agent-trace demo run
 agent-trace local lab — SIMULATED scenarios (scripted agent, mock tools, no shell, no network)
 
 ▶ benign Benign repository summary  [SIMULATED]
-  events   : 11   agents: main   mcp server: agent-trace-lab-server 1.0.0 via stdio (MCP 2025-11-25)
+  events   : 11   agents: main   mcp server: agent-trace-lab-server 1.1.0 via stdio (MCP 2025-11-25)
   findings : none
 
 ▶ prompt-injection Prompt injection in a README  [SIMULATED]

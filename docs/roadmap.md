@@ -1,6 +1,16 @@
 # Roadmap
 
-## v1.0.0 (this release)
+## v1.1.0 (this release)
+
+- Security fixes from the v1.0.0 review: detection blind spots (truncated payloads, structured
+  content, object keys), WHATWG-consistent outbound allowlist, driver-based database TLS default,
+  redaction gaps, terminal output escaping, linear-time analysis, import size limit, LLM client
+  hardening, least-privilege release workflow
+- `import --fail-on` and `demo run --fail-on`: the CI verdict comes from the validated import itself
+- Note: detection is stricter, so a CI gate that passed with v1.0.0 can now report findings
+
+## v1.0.0
+
 
 - Versioned event/trace/finding model (schema 1.1), recorder, redaction, validation
 - Storage backends: SQLite (default), PostgreSQL, MariaDB/MySQL with automatic migrations

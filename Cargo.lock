@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-trace-cli"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "agent-trace-core",
  "agent-trace-llm",
@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "agent-trace-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "regex",
  "serde",
@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "agent-trace-llm"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "agent-trace-core",
  "agent-trace-mcp",
@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "agent-trace-mcp"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "agent-trace-core",
  "anyhow",
@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "agent-trace-storage"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "agent-trace-core",
  "mysql",
