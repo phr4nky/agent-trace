@@ -152,6 +152,7 @@ impl TraceRecorder {
         created_at: OffsetDateTime,
         deterministic: bool,
     ) -> Self {
+        let name = Redactor::new().scrub(&name);
         let mut metadata = Map::new();
         metadata.insert("deterministic".into(), Value::Bool(deterministic));
         Self {

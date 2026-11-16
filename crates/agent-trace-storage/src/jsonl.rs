@@ -211,6 +211,7 @@ pub fn redact_record(record: &TraceRecord) -> (TraceRecord, u64) {
         }
         e.payload = payload;
         e.name = redactor.scrub(&e.name);
+        e.agent_id = e.agent_id.as_deref().map(|a| redactor.scrub(a));
         events.push(e);
     }
     trace.name = redactor.scrub(&trace.name);
