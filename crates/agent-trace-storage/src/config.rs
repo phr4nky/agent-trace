@@ -64,13 +64,12 @@ pub fn redact_url(url: &str) -> String {
     Redactor::new().scrub(url)
 }
 
-/// Host part of a database URL (no DNS resolution).
-pub(crate) fn host(url: &str) -> Option<String> {
-    agent_trace_core::policy::host_of(url)
-}
-
+/// Whether a host name or address (as parsed by the database driver) is loopback.
+/// Only `localhost` and literal loopback addresses count; DNS names never do.
 pub(crate) fn is_loopback(host: &str) -> bool {
-    matches!(host, "localhost" | "127.0.0.1" | "::1") || host.starts_with("127.")
+    let h = host.trim_start_matches('[').trim_end_matches(']');
+    h.eq_ignore_ascii_case("localhost")
+        || h.parse::<std::net::IpAddr>().is_ok_and(|a| a.is_loopback())
 }
 
 #[cfg(test)]

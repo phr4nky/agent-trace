@@ -1,43 +1,59 @@
 //! PostgreSQL backend (`postgres` driver, TLS via rustls with Mozilla roots).
 //!
-//! TLS: if the URL has no `sslmode` and the host is not loopback, `sslmode=require`
-//! is added. Set `sslmode=disable` explicitly to opt out.
+//! TLS: unless every host the driver will connect to is loopback (or a Unix socket),
+//! `sslmode=require` is enforced; the driver default `prefer` (downgradable) is upgraded.
+//! Set `sslmode=disable` explicitly to opt out.
 
+use postgres::config::{Host, SslMode};
 use postgres::types::{ToSql, Type};
-use postgres::{Client, NoTls};
+use postgres::{Client, Config, NoTls};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::StorageError;
 use crate::backend::{Backend, Dialect, SqlValue, numbered_placeholders};
-use crate::config::{host, is_loopback, redact_url};
+use crate::config::{is_loopback, redact_url};
 
 pub struct PostgresBackend {
     client: Client,
 }
 
-/// Apply the secure TLS default to a PostgreSQL URL.
-pub(crate) fn effective_url(url: &str) -> String {
-    if url.contains("sslmode=") {
-        return url.to_owned();
+/// Whether every connection target in the parsed configuration is local. This uses the
+/// driver's own parse (`host`/`hostaddr` parameters, host lists), not the URL authority.
+fn all_targets_local(config: &Config) -> bool {
+    let addrs = config.get_hostaddrs();
+    if !addrs.is_empty() {
+        return addrs.iter().all(|a| a.is_loopback());
     }
-    match host(url) {
-        Some(h) if !is_loopback(&h) => {
-            let sep = if url.contains('?') { '&' } else { '?' };
-            format!("{url}{sep}sslmode=require")
-        }
-        _ => url.to_owned(),
+    config.get_hosts().iter().all(|h| match h {
+        Host::Tcp(name) => is_loopback(name),
+        #[allow(unreachable_patterns)]
+        _ => true, // Unix domain socket
+    })
+}
+
+/// Parse a PostgreSQL URL and apply the secure TLS default.
+pub(crate) fn effective_config(url: &str) -> Result<Config, StorageError> {
+    let mut config: Config = url.parse().map_err(|e: postgres::Error| {
+        StorageError::Config(format!(
+            "invalid PostgreSQL URL {}: {}",
+            redact_url(url),
+            redact_url(&e.to_string())
+        ))
+    })?;
+    if config.get_ssl_mode() == SslMode::Prefer && !all_targets_local(&config) {
+        config.ssl_mode(SslMode::Require);
     }
+    Ok(config)
 }
 
 impl PostgresBackend {
     pub fn connect(url: &str) -> Result<Self, StorageError> {
-        let url = effective_url(url);
-        let wants_no_tls = url.contains("sslmode=disable");
-        let client = if wants_no_tls {
-            Client::connect(&url, NoTls)
+        let config = effective_config(url)?;
+        let client = if config.get_ssl_mode() == SslMode::Disable {
+            config.connect(NoTls)
         } else {
             let _ = rustls::crypto::ring::default_provider().install_default();
-            Client::connect(&url, MakeRustlsConnect::with_webpki_roots())
+            config.connect(MakeRustlsConnect::with_webpki_roots())
         }
         .map_err(|e| {
             let detail = e
@@ -46,7 +62,7 @@ impl PostgresBackend {
                 .unwrap_or_else(|| e.to_string());
             StorageError::Backend(format!(
                 "cannot connect to PostgreSQL at {}: {}",
-                redact_url(&url),
+                redact_url(url),
                 redact_url(&detail)
             ))
         })?;
@@ -133,25 +149,47 @@ impl Backend for PostgresBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::effective_url;
+    use super::effective_config;
+    use postgres::config::SslMode;
+
+    fn mode(url: &str) -> SslMode {
+        effective_config(url).unwrap().get_ssl_mode()
+    }
 
     #[test]
     fn tls_required_for_remote_hosts() {
+        assert_eq!(mode("postgres://u:p@db.example/t"), SslMode::Require);
         assert_eq!(
-            effective_url("postgres://u:p@db.example/t"),
-            "postgres://u:p@db.example/t?sslmode=require"
+            mode("postgres://u:p@db.example/t?application_name=x"),
+            SslMode::Require
         );
         assert_eq!(
-            effective_url("postgres://u:p@db.example/t?application_name=x"),
-            "postgres://u:p@db.example/t?application_name=x&sslmode=require"
+            mode("postgres://u:p@db.example/t?sslmode=disable"),
+            SslMode::Disable
         );
+        assert_eq!(mode("postgres://u:p@localhost:5432/t"), SslMode::Prefer);
+        assert_eq!(mode("postgres://u:p@[::1]:5432/t"), SslMode::Prefer);
         assert_eq!(
-            effective_url("postgres://u:p@db.example/t?sslmode=disable"),
-            "postgres://u:p@db.example/t?sslmode=disable"
+            mode("postgres://u:p@db.remote/t?hostaddr=127.0.0.1"),
+            SslMode::Prefer
         );
-        assert_eq!(
-            effective_url("postgres://u:p@localhost:5432/t"),
-            "postgres://u:p@localhost:5432/t"
-        );
+    }
+
+    // Regression: the TLS decision used a hand-written host parser that disagreed with the
+    // driver, so these URLs connected to a remote server with the downgradable `prefer`.
+    #[test]
+    fn tls_decision_uses_the_hosts_the_driver_connects_to() {
+        for url in [
+            "postgres://u:p@localhost/t?host=db.remote",
+            "postgres://u:p@/t?host=db.remote",
+            "postgres://u:p@127.0.0.1:5432,db.remote:5432/t",
+            "postgres://u:p@localhost/t?hostaddr=10.0.0.5",
+            "postgres://u:p@127.attacker.example/t",
+            "postgres://u:sslmode=disable@db.example/t",
+            "postgres://u:p@db.example/t?application_name=sslmode=disable",
+            "postgres://u:p@db.example/t?sslmode=prefer",
+        ] {
+            assert_eq!(mode(url), SslMode::Require, "{url}");
+        }
     }
 }

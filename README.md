@@ -362,8 +362,8 @@ agent-trace demo run     # all commands now use that database
 
 - **Schema is created and upgraded automatically.** Migrations run on connect and are tracked in `schema_migrations`. Use a dedicated database and a user allowed to create and alter tables. A database with an incompatible schema is rejected with a clear message.
 - **TLS is required by default for non-local hosts.** It uses rustls with Mozilla root certificates.
-  - PostgreSQL: if the URL has no `sslmode`, `sslmode=require` is added for non-loopback hosts. Opt out with `?sslmode=disable`.
-  - MySQL/MariaDB: `?ssl-mode=required|disabled`. The default is `required` for non-loopback hosts.
+  - PostgreSQL: `sslmode=require` is enforced unless every host the driver connects to (including `host=`/`hostaddr=` parameters and host lists) is loopback or a Unix socket; the driver default `prefer` is upgraded. Opt out with `?sslmode=disable`.
+  - MySQL/MariaDB: `?ssl-mode=required|disabled`. The default is `required` unless the driver connects through a socket or to a loopback address (after any `?host=` override).
 - **Credentials:** prefer the environment variable over `--database-url`, so the password does not end up in your shell history. Passwords in URLs are always shown as `[REDACTED…]` in output and errors.
 - Only **redacted** data is ever written to any backend.
 

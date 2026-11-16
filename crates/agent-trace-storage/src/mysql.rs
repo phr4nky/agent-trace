@@ -8,7 +8,7 @@ use mysql::{Conn, Opts, OptsBuilder, Params, Row, SslOpts, Value};
 
 use crate::StorageError;
 use crate::backend::{Backend, Dialect, SqlValue};
-use crate::config::{host, is_loopback, redact_url};
+use crate::config::{is_loopback, redact_url};
 
 pub struct MySqlBackend {
     conn: Conn,
@@ -20,8 +20,8 @@ pub(crate) enum SslMode {
     Required,
 }
 
-/// Split our `ssl-mode` parameter from the URL and apply the secure default.
-pub(crate) fn split_ssl_mode(url: &str) -> Result<(String, SslMode), StorageError> {
+/// Split our `ssl-mode` parameter from the URL. `None` when the URL does not set it.
+fn split_ssl_mode(url: &str) -> Result<(String, Option<SslMode>), StorageError> {
     let (base, query) = match url.split_once('?') {
         Some((b, q)) => (b, q),
         None => (url, ""),
@@ -48,10 +48,6 @@ pub(crate) fn split_ssl_mode(url: &str) -> Result<(String, SslMode), StorageErro
             _ => rest.push(pair),
         }
     }
-    let mode = mode.unwrap_or_else(|| match host(url) {
-        Some(h) if !is_loopback(&h) => SslMode::Required,
-        _ => SslMode::Disabled,
-    });
     let url = if rest.is_empty() {
         base.to_owned()
     } else {
@@ -60,11 +56,29 @@ pub(crate) fn split_ssl_mode(url: &str) -> Result<(String, SslMode), StorageErro
     Ok((url, mode))
 }
 
+/// Parse a MySQL URL and apply the secure TLS default: TLS is required unless the driver
+/// will connect through a socket or to a loopback address (after `?host=` overrides).
+pub(crate) fn effective_opts(url: &str) -> Result<(Opts, SslMode), StorageError> {
+    let (clean, mode) = split_ssl_mode(url)?;
+    let opts = Opts::from_url(&clean).map_err(|e| {
+        StorageError::Config(format!(
+            "invalid MySQL URL {}: {}",
+            redact_url(url),
+            redact_url(&e.to_string())
+        ))
+    })?;
+    let local = opts.get_socket().is_some() || is_loopback(&opts.get_ip_or_hostname());
+    let mode = mode.unwrap_or(if local {
+        SslMode::Disabled
+    } else {
+        SslMode::Required
+    });
+    Ok((opts, mode))
+}
+
 impl MySqlBackend {
     pub fn connect(url: &str) -> Result<Self, StorageError> {
-        let (clean, mode) = split_ssl_mode(url)?;
-        let opts = Opts::from_url(&clean)
-            .map_err(|e| StorageError::Config(format!("invalid MySQL URL: {e}")))?;
+        let (opts, mode) = effective_opts(url)?;
         let mut builder = OptsBuilder::from_opts(opts);
         if mode == SslMode::Required {
             let _ = rustls::crypto::ring::default_provider().install_default();
@@ -72,8 +86,9 @@ impl MySqlBackend {
         }
         let mut conn = Conn::new(builder).map_err(|e| {
             StorageError::Backend(format!(
-                "cannot connect to MySQL/MariaDB at {}: {e}",
-                redact_url(url)
+                "cannot connect to MySQL/MariaDB at {}: {}",
+                redact_url(url),
+                redact_url(&e.to_string())
             ))
         })?;
         conn.query_drop("SET SESSION sql_mode = 'STRICT_ALL_TABLES'")
@@ -144,24 +159,37 @@ impl Backend for MySqlBackend {
 mod tests {
     use super::*;
 
+    fn mode(url: &str) -> SslMode {
+        effective_opts(url).unwrap().1
+    }
+
     #[test]
     fn ssl_mode_defaults_and_parsing() {
-        let (u, m) = split_ssl_mode("mysql://u:p@db.example:3306/t").unwrap();
+        assert_eq!(mode("mysql://u:p@db.example:3306/t"), SslMode::Required);
+        assert_eq!(mode("mysql://u:p@127.0.0.1:3306/t"), SslMode::Disabled);
+        assert_eq!(mode("mysql://u:p@localhost/t"), SslMode::Disabled);
+        let (opts, m) =
+            effective_opts("mysql://u:p@db.example/t?ssl-mode=disabled&compress=true").unwrap();
+        assert_eq!(m, SslMode::Disabled);
+        assert_eq!(opts.get_ip_or_hostname(), "db.example");
+        assert!(effective_opts("mysql://h/t?ssl-mode=maybe").is_err());
+    }
+
+    // Regression: `?host=` overrides the URL authority in the driver, but the TLS default was
+    // decided on the authority; and DNS names starting with `127.` counted as loopback.
+    #[test]
+    fn tls_decision_uses_the_host_the_driver_connects_to() {
         assert_eq!(
-            (u.as_str(), m),
-            ("mysql://u:p@db.example:3306/t", SslMode::Required)
+            mode("mysql://u:p@localhost/t?host=db.remote"),
+            SslMode::Required
         );
-        let (u, m) = split_ssl_mode("mysql://u:p@127.0.0.1:3306/t").unwrap();
         assert_eq!(
-            (u.as_str(), m),
-            ("mysql://u:p@127.0.0.1:3306/t", SslMode::Disabled)
+            mode("mysql://u:p@127.attacker.example/t"),
+            SslMode::Required
         );
-        let (u, m) =
-            split_ssl_mode("mysql://u:p@db.example/t?ssl-mode=disabled&compress=true").unwrap();
         assert_eq!(
-            (u.as_str(), m),
-            ("mysql://u:p@db.example/t?compress=true", SslMode::Disabled)
+            mode("mysql://u:p@localhost/t?socket=/tmp/mysql.sock"),
+            SslMode::Disabled
         );
-        assert!(split_ssl_mode("mysql://h/t?ssl-mode=maybe").is_err());
     }
 }
