@@ -38,7 +38,7 @@ jobs:
           name="agent-trace-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/agent-trace${{ matrix.ext }}" "dist/$name/"
-          cp -r README.md LICENSE SECURITY.md examples "dist/$name/"
+          cp -r README.md LICENSE SECURITY.md CHANGELOG.md examples "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v7
         with:
@@ -57,7 +57,33 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum *.tar.gz > SHA256SUMS
+      # Only CHANGELOG.md is checked out; this job runs no code from the repository.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
+          path: src
+      - name: Release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && (/^## \[/ || /^\[[^]]+\]: /) { exit }
+            on { print }
+          ' src/CHANGELOG.md > notes.md
+          if grep -q '[^[:space:]]' notes.md; then
+            echo "using the CHANGELOG.md section for $version"
+          else
+            echo "::warning::CHANGELOG.md has no section for $version; using generated notes"
+            : > notes.md
+          fi
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --generate-notes
+        run: |
+          if [ -s notes.md ]; then
+            gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --generate-notes
+          fi
