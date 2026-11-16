@@ -100,7 +100,7 @@ pub fn explore(
         findings = analyze_and_store(&mut store, &record)?;
     }
     match snapshot {
-        Some((keys, size)) => print!(
+        Some((keys, size)) => out!(
             "{}",
             crate::output::term_safe_lines(&crate::tui::snapshot(record, findings, keys, size)?)
         ),

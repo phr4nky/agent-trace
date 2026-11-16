@@ -102,7 +102,7 @@ impl Rule for BlockedActionRule {
         "AT-004"
     }
     fn version(&self) -> u32 {
-        1
+        2
     }
     fn title(&self) -> &'static str {
         "Risky tool action blocked by policy"
@@ -128,18 +128,43 @@ impl Rule for BlockedActionRule {
                     .get("reason")
                     .and_then(Value::as_str)
                     .unwrap_or("no reason recorded");
+                // The outcome comes from the recorded lifecycle: an execution recorded after
+                // the denial means the decision was not enforced.
+                let executed = request
+                    .map(|r| tool_outcome(ctx, r))
+                    .filter(|(status, _)| *status == AttemptStatus::Executed);
+                let (description, severity, status, remediation) = match executed {
+                    Some((_, outcome_ids)) => {
+                        evidence.extend(outcome_ids);
+                        (
+                            format!(
+                                "Policy denied `{tool}` at event #{}: {reason}. An execution of the                                  same request was recorded afterwards, so the denial was not enforced.",
+                                decision.sequence
+                            ),
+                            Severity::High,
+                            AttemptStatus::Executed,
+                            "Check why the action ran despite the policy decision (audit-only or                              fail-open gate) and enforce denials before execution.",
+                        )
+                    }
+                    None => (
+                        format!(
+                            "Policy denied `{tool}` at event #{}: {reason}. The action was not executed.",
+                            decision.sequence
+                        ),
+                        Severity::Medium,
+                        AttemptStatus::Blocked,
+                        "Investigate why the agent attempted this action; the policy \
+                         worked as intended.",
+                    ),
+                };
                 FindingDraft {
                     title: self.title().to_owned(),
-                    description: format!(
-                        "Policy denied `{tool}` at event #{}: {reason}. The action was not executed.",
-                        decision.sequence
-                    ),
-                    severity: Severity::Medium,
+                    description,
+                    severity,
                     confidence: Confidence::High,
                     evidence,
-                    status: AttemptStatus::Blocked,
-                    remediation: "Investigate why the agent attempted this action; the policy \
-                                  worked as intended.",
+                    status,
+                    remediation,
                 }
                 .build(self, ctx)
             })

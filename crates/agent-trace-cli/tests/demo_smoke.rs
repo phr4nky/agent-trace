@@ -681,3 +681,85 @@ fn import_and_demo_fail_on_threshold() {
         Some(0)
     );
 }
+
+mod hunt_regressions {
+    use super::*;
+    use std::process::Stdio;
+
+    // Regression: clap exited with 2 on usage errors, the code the contract reserves for
+    // findings; a mistyped --fail-on in CI looked like "findings" instead of an error.
+    #[test]
+    fn usage_errors_exit_with_one() {
+        let data = tempfile::tempdir().unwrap();
+        let code = bin(data.path(), &["analyze", "--latest", "--fail-on", "High"])
+            .status
+            .code();
+        assert_eq!(code, Some(1));
+        assert_eq!(bin(data.path(), &["--help"]).status.code(), Some(0));
+        assert_eq!(bin(data.path(), &["--version"]).status.code(), Some(0));
+    }
+
+    // Regression: println! panicked (exit 101) when stdout was a closed pipe
+    // (`agent-trace analyze ... | head`), losing the documented exit code.
+    #[test]
+    fn closed_stdout_keeps_the_exit_code() {
+        let data = tempfile::tempdir().unwrap();
+        let input = repo().join("examples/ci/minimal-trace.jsonl");
+        ok(&bin(
+            data.path(),
+            &["import", "--input", input.to_str().unwrap()],
+        ));
+        for (args, expected) in [
+            (vec!["trace", "list"], 0),
+            (vec!["trace", "show", "--latest", "--payload"], 0),
+            (vec!["analyze", "--latest", "--fail-on", "low"], 2),
+        ] {
+            let mut child = Command::new(env!("CARGO_BIN_EXE_agent-trace"))
+                .arg("--data-dir")
+                .arg(data.path())
+                .arg("--no-color")
+                .args(&args)
+                .env_remove("AGENT_TRACE_DATA_DIR")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            drop(child.stdout.take()); // the reader goes away before anything is written
+            let out = child.wait_with_output().unwrap();
+            assert_eq!(
+                out.status.code(),
+                Some(expected),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    // Regression: a scenario that failed to load stopped `demo run` without finishing the
+    // live writer, so traces of scenarios that had already run were lost or left `running`.
+    #[test]
+    fn broken_scenario_file_loses_no_recorded_trace() {
+        let data = tempfile::tempdir().unwrap();
+        let lab = tempfile::tempdir().unwrap();
+        let src = repo().join("examples/local-lab");
+        for sub in ["scenarios", "documents"] {
+            std::fs::create_dir_all(lab.path().join(sub)).unwrap();
+            for entry in std::fs::read_dir(src.join(sub)).unwrap() {
+                let p = entry.unwrap().path();
+                std::fs::copy(&p, lab.path().join(sub).join(p.file_name().unwrap())).unwrap();
+            }
+        }
+        std::fs::write(
+            lab.path().join("scenarios/multi-agent-handoff.json"),
+            "{broken",
+        )
+        .unwrap();
+        let out = bin(
+            data.path(),
+            &["demo", "run", "--lab-dir", lab.path().to_str().unwrap()],
+        );
+        assert_eq!(out.status.code(), Some(1));
+        let list = ok(&bin(data.path(), &["trace", "list"]));
+        assert!(!list.contains("running"), "{list}");
+    }
+}

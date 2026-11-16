@@ -5,6 +5,55 @@ use agent_trace_core::{
     TrustLevel,
 };
 use std::borrow::Cow;
+use std::fmt;
+
+/// `println!` for command output on stdout that tolerates a closed pipe
+/// (`agent-trace ... | head`): output stops, the command finishes with its real exit code.
+macro_rules! outln {
+    () => {
+        $crate::output::emit(format_args!(""), true)
+    };
+    ($($arg:tt)*) => {
+        $crate::output::emit(format_args!($($arg)*), true)
+    };
+}
+
+/// `print!` counterpart of [`outln!`].
+macro_rules! out {
+    ($($arg:tt)*) => {
+        $crate::output::emit(format_args!($($arg)*), false)
+    };
+}
+
+/// Write to stdout. A reader that went away (broken pipe) silences further output instead
+/// of panicking like `println!` (exit 101, outside the documented exit codes); any other
+/// write error still panics as before.
+pub fn emit(args: fmt::Arguments<'_>, newline: bool) {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static CLOSED: AtomicBool = AtomicBool::new(false);
+    if CLOSED.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut stdout = std::io::stdout().lock();
+    let result = stdout
+        .write_fmt(args)
+        .and_then(|()| {
+            if newline {
+                stdout.write_all(b"\n")
+            } else {
+                Ok(())
+            }
+        })
+        .and_then(|()| stdout.flush());
+    match result {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+            CLOSED.store(true, Ordering::Relaxed);
+        }
+        Err(e) => panic!("failed printing to stdout: {e}"),
+    }
+}
 
 use uuid::Uuid;
 

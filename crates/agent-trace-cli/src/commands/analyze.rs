@@ -8,7 +8,7 @@ pub fn run(ctx: &Context, target: &TraceTarget, fail_on: Option<Threshold>) -> a
     let id = resolve_target(&mut store, target)?;
     let record = store.load_trace(id)?;
     let findings = analyze_and_store(&mut store, &record)?;
-    println!(
+    outln!(
         "analyzed trace {} ({})  [{}]  {} finding(s)",
         record.trace.trace_id,
         term_safe(&record.trace.name),
@@ -16,8 +16,8 @@ pub fn run(ctx: &Context, target: &TraceTarget, fail_on: Option<Threshold>) -> a
         findings.len()
     );
     for f in &findings {
-        println!("  {}", finding_line(s, &record, f));
-        println!("      {}", s.dim(&term_safe(&f.description)));
+        outln!("  {}", finding_line(s, &record, f));
+        outln!("      {}", s.dim(&term_safe(&f.description)));
     }
     Ok(threshold_exit(&findings, fail_on))
 }

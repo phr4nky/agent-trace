@@ -22,20 +22,20 @@ pub fn run(
     let mut store = ctx.open_store()?;
     store.insert_trace(&imported.record, TraceSource::Imported)?;
     let findings = analyze_and_store(&mut store, &imported.record)?;
-    println!(
+    outln!(
         "imported trace {} ({} events, {} value(s) redacted on import)",
         imported.record.trace.trace_id,
         imported.record.events.len(),
         imported.redactions
     );
     if imported.ignored_findings > 0 {
-        println!(
+        outln!(
             "ignored {} finding record(s) from the file; findings were recomputed locally",
             imported.ignored_findings
         );
     }
     for f in &findings {
-        println!("  {}", finding_line(&ctx.style, &imported.record, f));
+        outln!("  {}", finding_line(&ctx.style, &imported.record, f));
     }
     Ok(threshold_exit(&findings, fail_on))
 }

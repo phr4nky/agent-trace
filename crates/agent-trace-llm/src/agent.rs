@@ -372,13 +372,18 @@ fn agent_loop<'a>(
                             (report, false, received)
                         }
                         _ => {
-                            let Some(args) = call.input.as_object() else {
-                                results.push(Block::ToolResult {
-                                    tool_use_id: call.id.clone(),
-                                    content: "tool input must be a JSON object".into(),
-                                    is_error: true,
-                                });
-                                continue;
+                            // Non-object input still goes through the gate and is recorded,
+                            // kept visible like unparsable OpenAI arguments.
+                            let wrapped: Map<String, Value>;
+                            let args = match call.input.as_object() {
+                                Some(map) => map,
+                                None => {
+                                    wrapped = Map::from_iter([(
+                                        "_unparsed_arguments".to_owned(),
+                                        call.input.clone(),
+                                    )]);
+                                    &wrapped
+                                }
                             };
                             let mut extra = Map::new();
                             extra.insert("tool_use_id".into(), Value::String(call.id.clone()));

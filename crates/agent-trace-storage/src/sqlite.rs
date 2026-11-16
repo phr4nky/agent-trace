@@ -19,7 +19,19 @@ impl SqliteBackend {
         }
         let conn = Connection::open(path)?;
         crate::restrict_file(path)?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        // Switching a new database to WAL needs an exclusive lock and does not wait on the
+        // busy handler, so concurrent first opens retry until the timeout.
+        let deadline = std::time::Instant::now() + BUSY_TIMEOUT;
+        loop {
+            match conn.pragma_update(None, "journal_mode", "WAL") {
+                Ok(()) => break,
+                Err(e) if is_busy(&e) && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
         Self::init(conn)
     }
 
@@ -29,9 +41,18 @@ impl SqliteBackend {
 
     fn init(conn: Connection) -> Result<Self, StorageError> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         Ok(Self { conn })
     }
+}
+
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn is_busy(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
 }
 
 fn to_sqlite(params: &[SqlValue]) -> Vec<Value> {

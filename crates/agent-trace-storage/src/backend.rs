@@ -88,10 +88,31 @@ impl Dialect {
         }
     }
 
+    /// Start a write transaction. On SQLite the write lock is taken up front (IMMEDIATE),
+    /// so concurrent writers wait on the busy timeout instead of failing on a lock upgrade.
     pub(crate) fn begin(self) -> &'static str {
         match self {
             Self::MySql => "START TRANSACTION",
-            _ => "BEGIN",
+            Self::Sqlite => "BEGIN IMMEDIATE",
+            Self::Postgres => "BEGIN",
+        }
+    }
+
+    /// Statement that serializes concurrent schema migrations inside a transaction, where
+    /// the backend needs one (SQLite: BEGIN IMMEDIATE already does; MySQL: see `migrate`).
+    pub(crate) fn migration_xact_lock(self) -> Option<&'static str> {
+        match self {
+            Self::Postgres => Some("SELECT pg_advisory_xact_lock(4206921001)"),
+            _ => None,
+        }
+    }
+
+    /// Row lock on a trace inside a transaction, so concurrent writers of the same trace's
+    /// findings run one after the other (SQLite: BEGIN IMMEDIATE already serializes).
+    pub(crate) fn lock_trace_row(self) -> Option<&'static str> {
+        match self {
+            Self::Sqlite => None,
+            _ => Some("SELECT trace_id FROM traces WHERE trace_id = ? FOR UPDATE"),
         }
     }
 

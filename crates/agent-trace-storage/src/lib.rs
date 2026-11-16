@@ -28,16 +28,18 @@ pub use store::{Store, TraceSource, TraceSummary};
 
 #[derive(Debug, Error)]
 pub enum StorageError {
+    // The wrapped errors are part of the message and deliberately not exposed as
+    // `source()`: error-chain printers (the CLI) would otherwise print them twice.
     #[error("database error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
+    Sqlite(rusqlite::Error),
     #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(std::io::Error),
     #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
+    Json(serde_json::Error),
     #[error("time formatting error: {0}")]
-    TimeFormat(#[from] time::error::Format),
+    TimeFormat(time::error::Format),
     #[error("time parsing error: {0}")]
-    TimeParse(#[from] time::error::Parse),
+    TimeParse(time::error::Parse),
     #[error("trace {0} already exists")]
     DuplicateTrace(Uuid),
     #[error("trace {0:?} not found")]
@@ -47,7 +49,7 @@ pub enum StorageError {
     #[error("import failed at line {line}: {message}")]
     Import { line: usize, message: String },
     #[error("invalid trace: {0}")]
-    Invalid(#[from] agent_trace_core::ValidationError),
+    Invalid(agent_trace_core::ValidationError),
     #[error("corrupt database: {0}")]
     Corrupt(String),
     #[error("{0}")]
@@ -56,9 +58,30 @@ pub enum StorageError {
     Config(String),
 }
 
+macro_rules! storage_error_from {
+    ($($variant:ident($ty:ty)),* $(,)?) => {
+        $(impl From<$ty> for StorageError {
+            fn from(e: $ty) -> Self {
+                Self::$variant(e)
+            }
+        })*
+    };
+}
+
+storage_error_from!(
+    Sqlite(rusqlite::Error),
+    Io(std::io::Error),
+    Json(serde_json::Error),
+    TimeFormat(time::error::Format),
+    TimeParse(time::error::Parse),
+    Invalid(agent_trace_core::ValidationError),
+);
+
 /// Create a directory (and parents) readable only by the current user where supported.
+/// A directory that already exists is left as it is: it may be a project or shared
+/// directory the user chose (`sqlite:./traces.db`, `/tmp`), not one agent-trace owns.
 pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
-    if dir.as_os_str().is_empty() {
+    if dir.as_os_str().is_empty() || dir.is_dir() {
         return Ok(());
     }
     std::fs::create_dir_all(dir)?;
@@ -79,16 +102,27 @@ pub fn create_private_file(path: &Path) -> std::io::Result<std::fs::File> {
             format!("refusing to write through symlink {}", path.display()),
         ));
     }
+    open_private_nofollow(path)
+}
+
+/// Open `path` for writing without following a symlink at its final component (the check
+/// above alone could be raced) and restrict the opened file itself, not whatever the path
+/// names afterwards.
+fn open_private_nofollow(path: &Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
     let file = options.open(path)?;
     // An existing file keeps its old mode on open; restrict it before anything is written.
-    restrict_file(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     Ok(file)
 }
 
@@ -115,6 +149,12 @@ mod private_file_tests {
         let link = dir.path().join("link.json");
         std::os::unix::fs::symlink(&victim, &link).unwrap();
         assert!(create_private_file(&link).is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+
+        // Regression: the symlink check and the open were separate calls, so a symlink
+        // swapped in between was followed (and the victim truncated). The open itself must
+        // refuse a symlink.
+        assert!(open_private_nofollow(&link).is_err());
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
     }
 }

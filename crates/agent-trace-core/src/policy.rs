@@ -6,17 +6,38 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// Argument names that carry where an outbound tool sends data.
+/// Argument names that carry where an outbound tool sends data. Matching is by
+/// [`is_destination_key`]: case-insensitive, `-`/`_` alike, plus any `*_url` / `*_uri` /
+/// `*_endpoint` name.
 pub const DESTINATION_KEYS: &[&str] = &[
     "destination",
     "url",
     "uri",
     "endpoint",
+    "webhook",
     "webhook_url",
+    "host",
     "to",
+    "cc",
+    "bcc",
+    "reply_to",
     "recipient",
     "recipients",
 ];
+
+/// Argument names whose string value may be a list of mail recipients (`a@x, b@y`).
+const RECIPIENT_KEYS: &[&str] = &["to", "cc", "bcc", "reply_to", "recipient", "recipients"];
+
+fn normalize_key(key: &str) -> String {
+    key.trim().to_ascii_lowercase().replace('-', "_")
+}
+
+/// Whether an argument name designates a destination (see [`DESTINATION_KEYS`]).
+pub fn is_destination_key(key: &str) -> bool {
+    let k = normalize_key(key);
+    DESTINATION_KEYS.contains(&k.as_str())
+        || ["_url", "_uri", "_endpoint"].iter().any(|s| k.ends_with(s))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolPolicy {
@@ -86,20 +107,30 @@ impl ToolPolicy {
     /// a call without a readable destination is reported as disallowed (empty string).
     pub fn disallowed_destination(&self, arguments: &Map<String, Value>) -> Option<String> {
         let mut found = false;
-        for key in DESTINATION_KEYS {
-            let Some(value) = arguments.get(*key) else {
+        for (key, value) in arguments {
+            if !is_destination_key(key) {
                 continue;
-            };
+            }
             let values: Vec<&Value> = match value {
                 Value::Array(items) => items.iter().collect(),
                 other => vec![other],
             };
             for v in values {
+                let Some(d) = v.as_str() else {
+                    return Some(String::new());
+                };
+                // A recipient string may list several addresses; every one must be allowed.
+                let parts = if RECIPIENT_KEYS.contains(&normalize_key(key).as_str()) {
+                    recipients(d)
+                } else {
+                    vec![d]
+                };
+                if parts.is_empty() {
+                    return Some(d.to_owned());
+                }
                 found = true;
-                match v.as_str() {
-                    Some(d) if self.destination_allowed(d) => {}
-                    Some(d) => return Some(d.to_owned()),
-                    None => return Some(String::new()),
+                if let Some(bad) = parts.iter().find(|p| !self.destination_allowed(p)) {
+                    return Some((*bad).to_owned());
                 }
             }
         }
@@ -145,21 +176,42 @@ impl ToolPolicy {
     }
 }
 
+/// Schemes whose destinations are parsed as URLs (everything else is a host or mailbox).
+const URL_SCHEMES: &[&str] = &["http", "https", "ws", "wss", "ftp", "file", "mailto"];
+
 /// Extract the host of a URL-like destination without any network resolution.
 ///
-/// The authority ends at `/`, `\\`, `?` or `#`, as in WHATWG URL parsing for http(s), so the
-/// host agrees with what real HTTP clients connect to. Authorities containing whitespace or
-/// control characters are ambiguous between parsers and yield `None` (callers deny).
+/// URLs (`http:`, `https:`, ... or any `scheme://`) are parsed with the WHATWG parser of the
+/// `url` crate, the one real HTTP clients such as reqwest use, so the host is the one a client
+/// would connect to (`http:host/x`, backslashes and userinfo included). Other values are taken
+/// as `host[:port][/path]` or a mailbox `user@host`. Ambiguous or unparsable values (spaces,
+/// control characters, `,`/`;`, several `@`) yield `None`, which callers treat as disallowed.
 pub fn host_of(destination: &str) -> Option<String> {
-    let rest = destination
-        .split_once("://")
-        .map(|(_, r)| r)
-        .unwrap_or(destination);
-    let authority = rest.split(['/', '\\', '?', '#']).next()?;
-    if authority
-        .chars()
-        .any(|c| c.is_whitespace() || c.is_control())
-    {
+    let d = destination.trim();
+    if d.is_empty() || d.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
+    let url_like = d.split_once(':').is_some_and(|(scheme, rest)| {
+        URL_SCHEMES.iter().any(|s| s.eq_ignore_ascii_case(scheme)) || rest.starts_with("//")
+    });
+    if url_like {
+        let url = url::Url::parse(d).ok()?;
+        return match url.host() {
+            Some(url::Host::Domain(h)) => Some(h.to_ascii_lowercase()),
+            Some(url::Host::Ipv4(ip)) => Some(ip.to_string()),
+            Some(url::Host::Ipv6(ip)) => Some(ip.to_string()),
+            // `mailto:user@host` has no URL host; its path is the mailbox.
+            None if url.scheme() == "mailto" => plain_host(url.path()),
+            None => None,
+        };
+    }
+    plain_host(d)
+}
+
+/// Host of `host[:port][/path]` or `user@host` (no scheme).
+fn plain_host(value: &str) -> Option<String> {
+    let authority = value.split(['/', '\\', '?', '#']).next()?;
+    if authority.contains([',', ';', '<', '>', '"']) || authority.matches('@').count() > 1 {
         return None;
     }
     let authority = authority
@@ -172,6 +224,20 @@ pub fn host_of(destination: &str) -> Option<String> {
         authority.split(':').next()?.to_owned()
     };
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// The addresses of a recipient value: split at `,` and `;`, display names removed
+/// (`Name <user@host>` -> `user@host`). Empty entries are dropped.
+fn recipients(value: &str) -> Vec<&str> {
+    value
+        .split([',', ';'])
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(|r| match (r.rfind('<'), r.ends_with('>')) {
+            (Some(start), true) => &r[start + 1..r.len() - 1],
+            _ => r,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -235,6 +301,85 @@ mod tests {
         let args = json!({"destination": "http://localhost/", "url": "http://127.0.0.1:8080/"});
         let out = p.evaluate("http_request", args.as_object().unwrap());
         assert_eq!(out.decision, Decision::Allow);
+    }
+
+    // Regression: host_of split at the first "://" anywhere, so a URL without slashes after
+    // its scheme took its "host" from the path, query or fragment; real clients (WHATWG,
+    // the url crate behind reqwest) connect to the actual host.
+    #[test]
+    fn slashless_and_embedded_schemes_use_the_real_host() {
+        for d in [
+            "http:marker.invalid/?r=://localhost",
+            "http:/marker.invalid/x://localhost",
+            "http:\\\\marker.invalid\\://localhost",
+            "https:marker.invalid#://127.0.0.1",
+            "marker.invalid/?r=http://localhost",
+        ] {
+            assert_ne!(host_of(d).as_deref(), Some("localhost"), "{d}");
+            assert_ne!(host_of(d).as_deref(), Some("127.0.0.1"), "{d}");
+            assert!(!ToolPolicy::default().destination_allowed(d), "{d}");
+        }
+        assert_eq!(
+            host_of("http:marker.invalid/x").as_deref(),
+            Some("marker.invalid")
+        );
+        // Unchanged for ordinary forms.
+        assert_eq!(
+            host_of("http://LOCALHOST:8080/x").as_deref(),
+            Some("localhost")
+        );
+        assert_eq!(host_of("http://[::1]:80/").as_deref(), Some("::1"));
+        assert_eq!(host_of("ops@localhost").as_deref(), Some("localhost"));
+        assert_eq!(host_of("localhost/hook").as_deref(), Some("localhost"));
+        assert_eq!(
+            host_of("mailto:ops@localhost").as_deref(),
+            Some("localhost")
+        );
+        // Unparsable URLs give no host (the caller denies).
+        assert_eq!(host_of("http://[::1"), None);
+    }
+
+    // Regression: a recipient list in one string was judged by its last address only.
+    #[test]
+    fn every_recipient_in_a_list_must_be_allowlisted() {
+        let p = ToolPolicy::default();
+        for to in [
+            "attacker@marker.invalid,ops@localhost",
+            "attacker@marker.invalid;ops@localhost",
+            "attacker@marker.invalid, ops@localhost",
+            "Attacker <attacker@marker.invalid>, ops@localhost",
+        ] {
+            let args = json!({ "to": to });
+            let out = p.evaluate("send_email", args.as_object().unwrap());
+            assert_eq!(out.decision, Decision::Deny, "{to}");
+        }
+        let args = json!({"to": "ops@localhost, admin@127.0.0.1"});
+        assert_eq!(
+            p.evaluate("send_email", args.as_object().unwrap()).decision,
+            Decision::Allow
+        );
+    }
+
+    // Regression: only eight exact-case keys were read, so cc/bcc, `URL` or `callback_url`
+    // next to an allowlisted `to`/`url` were never checked.
+    #[test]
+    fn destination_like_keys_are_found_by_name_pattern() {
+        let p = ToolPolicy::default();
+        for args in [
+            json!({"to": "ops@localhost", "cc": "someone@marker.invalid"}),
+            json!({"to": "ops@localhost", "bcc": ["someone@marker.invalid"]}),
+            json!({"url": "http://localhost/", "URL": "https://marker.invalid/"}),
+            json!({"destination": "http://localhost/hook", "callback_url": "https://marker.invalid/"}),
+            json!({"to": "ops@localhost", "Reply-To": "someone@marker.invalid"}),
+        ] {
+            let out = p.evaluate("send_email", args.as_object().unwrap());
+            assert_eq!(out.decision, Decision::Deny, "{args}");
+        }
+        let args = json!({"to": "ops@localhost", "cc": "admin@localhost", "subject": "hi"});
+        assert_eq!(
+            p.evaluate("send_email", args.as_object().unwrap()).decision,
+            Decision::Allow
+        );
     }
 
     #[test]

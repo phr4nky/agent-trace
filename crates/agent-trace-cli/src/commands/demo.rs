@@ -77,21 +77,21 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
         .build()?;
 
     match &llm {
-        None => println!(
+        None => outln!(
             "{}",
             s.bold(
                 "agent-trace local lab — SIMULATED scenarios (scripted agent, mock tools, no shell, no network)"
             )
         ),
         Some(client) => {
-            println!(
+            outln!(
                 "{}",
                 s.bold(&format!(
                     "agent-trace local lab — LIVE MODEL {} (mock tools, policy-gated, no shell)",
                     client.config().describe()
                 ))
             );
-            println!(
+            outln!(
                 "{}",
                 s.yellow(
                     "note: the lab's prompts and fixture documents (incl. their fake secrets) are sent to this provider."
@@ -99,20 +99,26 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
             );
         }
     }
-    println!("lab: {}", lab.root.display());
+    outln!("lab: {}", lab.root.display());
     if !args.step_delay.is_zero() {
-        println!(
+        outln!(
             "live mode: {} ms per step — watch with: agent-trace explore --latest --follow",
             args.step_delay.as_millis()
         );
     }
-    println!();
+    outln!();
+
+    // Load every scenario first: an error later would leave the live writer unfinished and
+    // the traces of scenarios that already ran lost or stuck at `running`.
+    let scenarios = names
+        .iter()
+        .map(|name| lab.load_scenario(name).map(|s| (*name, s)))
+        .collect::<Result<Vec<_>, _>>()?;
 
     // Every event is persisted as soon as it is recorded (live), by a writer thread.
     let writer = LiveWriter::spawn(store, TraceSource::Recorded, true);
     let mut produced: Vec<(String, String, Result<TraceRecord, String>)> = Vec::new();
-    for name in &names {
-        let scenario = lab.load_scenario(name)?;
+    for (name, scenario) in scenarios {
         let result = match &llm {
             None => {
                 let rec = lab_recorder(&scenario, ExecutionMode::Simulated, args.deterministic)
@@ -142,6 +148,31 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
         if matches!(e, StorageError::DuplicateTrace(_)) && args.deterministic {
             anyhow::bail!("{e}: deterministic traces have fixed ids; use a fresh --data-dir");
         }
+        // The store failed mid-run; keep the complete in-memory traces as files so nothing
+        // that was recorded is lost (they can be imported later).
+        let mut saved = Vec::new();
+        for (name, _, result) in &produced {
+            if let Ok(record) = result {
+                let path = exports.join(format!("{name}-{}.jsonl", record.trace.trace_id));
+                if create_private_file(&path)
+                    .map_err(StorageError::from)
+                    .and_then(|f| write_jsonl(BufWriter::new(f), record, &[]))
+                    .is_ok()
+                {
+                    saved.push(path.display().to_string());
+                }
+            }
+        }
+        if saved.is_empty() {
+            return Err(e.into());
+        }
+        eprintln!(
+            "storage failed; the recorded traces were saved as JSONL \
+             (re-import them with `agent-trace import`):"
+        );
+        for path in &saved {
+            eprintln!("  {}", crate::output::term_safe(path));
+        }
         return Err(e.into());
     }
 
@@ -153,13 +184,13 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
             Ok(r) => r,
             Err(e) => {
                 failures += 1;
-                println!(
+                outln!(
                     "{} {}  [{}]",
                     s.bold(&format!("▶ {name}")),
                     s.dim(&title),
                     s.red("ABORTED")
                 );
-                println!(
+                outln!(
                     "  error    : {}\n",
                     crate::output::term_safe(&agent_trace_core::Redactor::new().scrub(&e))
                 );
@@ -183,14 +214,14 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
         )?;
 
         let agents = agent_trace_core::Trace::agents(&record.events);
-        println!(
+        outln!(
             "{} {}  [{}]",
             s.bold(&format!("▶ {name}")),
             s.dim(&title),
             s.mode(record.trace.execution_mode)
         );
-        println!("  trace id : {}", record.trace.trace_id);
-        println!(
+        outln!("  trace id : {}", record.trace.trace_id);
+        outln!(
             "  events   : {}   agents: {}   mcp server: {} {} via {} (MCP {})",
             record.events.len(),
             agents.join(", "),
@@ -205,37 +236,37 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
             .get("llm_endpoint")
             .and_then(|v| v.as_str())
         {
-            println!("  model    : {model}");
+            outln!("  model    : {model}");
         }
         if findings.is_empty() {
-            println!("  findings : {}", s.green("none"));
+            outln!("  findings : {}", s.green("none"));
         } else {
-            println!("  findings :");
+            outln!("  findings :");
             for f in &findings {
-                println!("    {}", finding_line(s, &record, f));
+                outln!("    {}", finding_line(s, &record, f));
             }
         }
-        println!("  trace    : {}", jsonl_path.display());
-        println!("  report   : {}\n", report_path.display());
+        outln!("  trace    : {}", jsonl_path.display());
+        outln!("  report   : {}\n", report_path.display());
         last_id = Some(record.trace.trace_id);
     }
 
-    println!("database: {location}");
+    outln!("database: {location}");
     if let Some(id) = last_id {
-        println!(
+        outln!(
             "next: agent-trace trace show {}   |   agent-trace explore --latest",
             short(id)
         );
     }
     if llm.is_none() {
-        println!(
+        outln!(
             "{}",
             s.dim(
                 "All scenario behavior is SIMULATED. Findings are indicators, not proof of compromise."
             )
         );
     } else {
-        println!(
+        outln!(
             "{}",
             s.dim(
                 "Model decisions are LIVE; tools are mocks. Findings are indicators, not proof of compromise."
