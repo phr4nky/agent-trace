@@ -1,0 +1,3 @@
+# Check out every text file with LF, on Windows too. Golden traces, lab documents and
+# JSONL fixtures are compared byte for byte; CRLF conversion would break them.
+* text=auto eol=lf
