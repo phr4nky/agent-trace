@@ -145,6 +145,30 @@ impl TraceRecorder {
         Self::build(name.into(), mode, trace_id, DETERMINISTIC_EPOCH, true)
     }
 
+    /// Start a trace with a given ID, e.g. one derived from an external session ID, so later
+    /// processes can find and [`resume`](Self::resume) it.
+    pub fn with_trace_id(name: impl Into<String>, mode: ExecutionMode, trace_id: Uuid) -> Self {
+        Self::build(name.into(), mode, trace_id, now_utc(), false)
+    }
+
+    /// Continue a stored trace in another process: new events get the next sequence numbers
+    /// and may link to the stored events. A sink only receives the new events (no `Started`).
+    pub fn resume(record: TraceRecord) -> Self {
+        Self {
+            trace: record.trace,
+            events: record.events,
+            redactor: Redactor::new(),
+            deterministic: false,
+            sink: None,
+            started: true,
+        }
+    }
+
+    /// Change the status without finishing (a resumed trace can end and start again).
+    pub fn set_status(&mut self, status: TraceStatus) {
+        self.trace.status = status;
+    }
+
     fn build(
         name: String,
         mode: ExecutionMode,

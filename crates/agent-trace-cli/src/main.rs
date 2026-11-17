@@ -4,6 +4,7 @@
 mod output;
 mod commands;
 mod config;
+mod hooks;
 mod logging;
 mod tui;
 
@@ -136,6 +137,18 @@ enum Command {
         #[arg(last = true, required = true, value_name = "COMMAND")]
         command: Vec<String>,
     },
+    /// Claude Code hook: record the hook event on stdin in the session's trace and, in
+    /// enforce mode, deny tool calls the policy denies. Register it with the settings that
+    /// `agent-trace hook --print-settings` prints.
+    Hook {
+        /// observe: record only (default). enforce: deny tool calls the policy denies.
+        /// Overrides `mode` in the [hooks] table of agent-trace.toml.
+        #[arg(long, value_enum)]
+        mode: Option<ProxyModeArg>,
+        /// Print the `hooks` block for Claude Code's settings.json and exit.
+        #[arg(long)]
+        print_settings: bool,
+    },
     /// Internal: run the local lab MCP server on stdio.
     #[command(hide = true)]
     LabServer {
@@ -188,6 +201,15 @@ enum DemoCommand {
 pub enum ProxyModeArg {
     Observe,
     Enforce,
+}
+
+impl ProxyModeArg {
+    fn into_mode(self) -> agent_trace_mcp::ProxyMode {
+        match self {
+            Self::Observe => agent_trace_mcp::ProxyMode::Observe,
+            Self::Enforce => agent_trace_mcp::ProxyMode::Enforce,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -269,6 +291,16 @@ fn main() -> ExitCode {
     let result =
         match cli.command {
             Command::LabServer { documents } => commands::lab_server(&documents).map(|_| EXIT_OK),
+            Command::Hook {
+                mode,
+                print_settings,
+            } => commands::hook::run(
+                &ctx,
+                commands::hook::HookArgs {
+                    mode: mode.map(ProxyModeArg::into_mode),
+                    print_settings,
+                },
+            ),
             Command::Proxy {
                 name,
                 mode,
@@ -278,10 +310,7 @@ fn main() -> ExitCode {
                 &ctx,
                 commands::proxy::ProxyArgs {
                     name,
-                    mode: mode.map(|m| match m {
-                        ProxyModeArg::Observe => agent_trace_mcp::ProxyMode::Observe,
-                        ProxyModeArg::Enforce => agent_trace_mcp::ProxyMode::Enforce,
-                    }),
+                    mode: mode.map(ProxyModeArg::into_mode),
                     call_timeout_secs: call_timeout,
                     command,
                 },

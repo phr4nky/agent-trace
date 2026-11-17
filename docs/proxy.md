@@ -192,7 +192,7 @@ agent-trace [--config PATH] [--data-dir PATH] [--database-url URL] proxy
 - **One server per proxy, one trace per proxy.** Content that enters through server A and
   leaves through server B is in two traces. Joining them is planned.
 - **The client's built-in tools are invisible.** Claude Code's Bash, Write or WebFetch never
-  pass through an MCP server. Recording them needs a hooks adapter (planned).
+  pass through an MCP server. Use the [Claude Code hooks](claude-code-hooks.md) for those.
 - **Forwarded, not recorded:** `resources/list`, `resources/templates/list`, `prompts/list`.
 - **Not forwarded:** resource subscriptions, list-changed notifications, logging, completions,
   and requests from the server to the client (sampling, elicitation, roots). The proxy announces

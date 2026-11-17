@@ -8,6 +8,26 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+**Upgrade notes:**
+
+- `Bash`, `PowerShell`, `Write`, `Edit`, `MultiEdit` and `NotebookEdit` are now privileged
+  tools in the default policy. Imported traces of Claude Code sessions can report AT-002 and
+  AT-006 findings where they did not before.
+
+### Added
+
+- `agent-trace hook`: Claude Code hooks adapter. Registered for SessionStart, UserPromptSubmit,
+  PreToolUse, PostToolUse, PostToolUseFailure, SubagentStart, SubagentStop, Stop and SessionEnd,
+  it records a whole session as one live trace, built-in tools and MCP tools alike, with
+  subagents as separate agents. In enforce mode it denies a privileged tool call after untrusted
+  content reached the acting agent, also through a subagent's report (AT-006).
+  `agent-trace hook --print-settings` prints the block for Claude Code's settings. See
+  `docs/claude-code-hooks.md`.
+- `[hooks]` table in `agent-trace.toml`: mode, taint sources (default WebFetch, WebSearch and
+  MCP tools) and `on_error` (fail open by default, or deny tool calls while recording fails).
+- Library: `TraceRecorder::with_trace_id`, `TraceRecorder::resume`,
+  `TraceRecorder::set_status`, `ToolPolicy::evaluate_in_session`, `agent_trace_mcp::apply_mode`.
+
 ## [1.3.0] - 2026-11-17
 
 Record and protect the agents you already use: an MCP proxy for Claude Code, Cursor, Claude

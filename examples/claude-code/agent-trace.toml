@@ -1,0 +1,18 @@
+# agent-trace configuration for Claude Code hooks. See docs/claude-code-hooks.md.
+# Register it with:
+#   agent-trace --config /path/to/agent-trace.toml hook --print-settings
+# and paste the printed block into ~/.claude/settings.json.
+
+[policy]
+# Claude Code's Bash, PowerShell, Write, Edit, MultiEdit and NotebookEdit are privileged by
+# default. Add MCP tools that write with your credentials.
+privileged = ["mcp__github__create_*", "mcp__github__push_files", "mcp__github__merge_*"]
+
+[hooks]
+# "observe" records only; "enforce" denies privileged tool calls after untrusted content.
+mode = "enforce"
+# Content from outside the machine. Add "Read" when working in repositories you do not trust.
+taint_sources = ["WebFetch", "WebSearch", "mcp__*"]
+# "allow": a broken recorder never blocks Claude Code. "deny": tool calls are denied while
+# recording fails (enforce mode only).
+on_error = "allow"

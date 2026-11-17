@@ -66,6 +66,24 @@
 The recorder lock is held only while recording, never across a call to the upstream server, so
 concurrent tool calls from the client are not serialized. Details: [proxy.md](proxy.md).
 
+## Data flow of a Claude Code session (hooks)
+
+Claude Code starts `agent-trace hook` as a new process for every hook event, with the event as
+JSON on stdin. The process:
+
+1. derives the trace ID from `session_id` (UUID v5), takes a file lock for that session in
+   `<data dir>/hooks/` (parallel tool calls run hooks concurrently),
+2. loads the trace and continues it with `TraceRecorder::resume`, or starts it with
+   `TraceRecorder::with_trace_id`,
+3. maps the event (`hooks.rs`): PreToolUse uses `record_gate` and
+   `ToolPolicy::evaluate_in_session`, the same decision as the proxy; PostToolUse finds its
+   request by `tool_use_id`,
+4. appends the new events, updates the header and re-runs the rules,
+5. prints Claude Code's deny decision on stdout when a PreToolUse call is denied in enforce mode.
+
+There is no long-running process: all state is in the trace. Details:
+[claude-code-hooks.md](claude-code-hooks.md).
+
 ## Live recording
 
 `TraceRecorder::with_sink` hands every (already redacted) event to a sink the moment it is recorded.
