@@ -10,19 +10,19 @@
                  |                                       |
          +-------v---------+                     +-------v--------+
          | agent-trace-mcp |                     | Trace explorer |
-         | scripted agent  |                     | queries / TUI  |
+         | lab · proxy     |                     | queries / TUI  |
          | rmcp stdio      |                     +-------+--------+
          +-------+---------+                             |
                  |                                       |
          +-------v---------------------------------------v-------+
          |                agent-trace-core                       |
          | recorder (ids, sequence, redaction) · provenance      |
-         | validation · policy · rules AT-001…AT-005             |
+         | validation · policy · rules AT-001…AT-006             |
          +--------------------------+----------------------------+
                                     |
                          +----------v-----------+
                          | agent-trace-storage  |
-                         | SQLite + JSONL/JSON  |
+                         | SQL backends, JSONL  |
                          +----------------------+
 ```
 
@@ -31,8 +31,8 @@
 | Crate | Responsibility | Must not depend on |
 |---|---|---|
 | `agent-trace-core` | Event/trace/finding model, `TraceRecorder`, `Redactor`, provenance index, validation, `ToolPolicy`, rules | `rmcp`, `ratatui`, storage, vendors |
-| `agent-trace-storage` | SQLite schema + migrations, JSONL import/export, JSON evidence report | `rmcp`, `ratatui` |
-| `agent-trace-mcp` | `McpSession` adapter (rmcp client over child-process stdio or in-process), `LabServer`, scripted (multi-)agent, shared policy gate | `ratatui`, any HTTP client |
+| `agent-trace-storage` | SQLite, PostgreSQL and MySQL/MariaDB backends with migrations, `LiveWriter`, JSONL import/export, JSON evidence report | `rmcp`, `ratatui` |
+| `agent-trace-mcp` | `McpSession` adapter (rmcp client over child-process stdio or in-process), `LabServer`, scripted (multi-)agent, shared policy gate, MCP `Proxy` | `ratatui`, any HTTP client |
 | `agent-trace-llm` | Anthropic Messages / OpenAI Chat Completions clients (reqwest + rustls), LLM agent loop with delegation | `ratatui` |
 | `agent-trace-cli` | `agent-trace` binary, commands, ratatui explorer, redacting log writer | — |
 
@@ -46,6 +46,25 @@
    `tool_result_received` (origin `mcp_tool`, `lower_trust`) and `tool_call_completed`/`failed`.
 5. The recorder redacts every payload and metadata map before storing the event.
 6. The trace is stored in SQLite, analyzed (`Analyzer`), and exported as JSONL + JSON report.
+
+## Data flow of a proxied session
+
+1. An MCP client starts `agent-trace proxy -- <server command>` as its server.
+2. The proxy starts the upstream server (`McpSession::connect_upstream`, environment unchanged)
+   and then answers the client's `initialize` with the upstream's name, version and instructions,
+   announcing only tools, resources and prompts.
+3. `tools/list`, `resources/read` and `prompts/get` answers are forwarded and recorded as
+   `external_content_observed` (`lower_trust`).
+4. `tools/call` is recorded with the lab's lifecycle (`record_gate`, `McpSession::record_executed`,
+   `McpSession::record_result`). The request lists earlier untrusted results as
+   `context_event_ids` with `link_basis = session_context`; there is no `caused_by` link, because
+   the proxy cannot see the model's context. In `enforce` mode a denied call is answered with a
+   tool error and never forwarded.
+5. Events stream to `LiveWriter`, which runs the rules with the configured policy after each event.
+6. The trace ends when the client disconnects or on Ctrl-C/SIGTERM.
+
+The recorder lock is held only while recording, never across a call to the upstream server, so
+concurrent tool calls from the client are not serialized. Details: [proxy.md](proxy.md).
 
 ## Live recording
 
@@ -108,6 +127,7 @@ without losing data. MySQL/MariaDB commit DDL implicitly, so a failed migration 
 - **Storage:** besides SQLite, PostgreSQL and MySQL/MariaDB are supported via `--database-url`.
 - **Beyond the plan's v1 scope, also in v1.0.0:** real LLM providers (Anthropic, OpenAI-compatible), multi-agent
   traces with rule AT-006, schema 1.1 (agent IDs, context links, trace status), and live recording with `explore --follow`.
-- **Rule versions:** AT-002 and AT-003 are version 2 (they follow context links).
+- **Rule versions:** see the rule table in the README; finding IDs include the rule version.
+  Version 1.3 moved AT-002 to v4 and AT-006 to v3 (medium confidence on proxy session links).
 - **Versions:** `rmcp` 3.10 (MCP protocol 2025-11-25 negotiated), `ratatui` 0.30, Rust edition 2024. All pinned in `Cargo.lock`.
 - **License:** MIT.

@@ -4,10 +4,11 @@ use crate::{Threshold, TraceTarget};
 
 pub fn run(ctx: &Context, target: &TraceTarget, fail_on: Option<Threshold>) -> anyhow::Result<u8> {
     let s = &ctx.style;
+    let analyzer = ctx.analyzer()?;
     let mut store = ctx.open_store()?;
     let id = resolve_target(&mut store, target)?;
     let record = store.load_trace(id)?;
-    let findings = analyze_and_store(&mut store, &record)?;
+    let findings = analyze_and_store(&analyzer, &mut store, &record)?;
     outln!(
         "analyzed trace {} ({})  [{}]  {} finding(s)",
         record.trace.trace_id,

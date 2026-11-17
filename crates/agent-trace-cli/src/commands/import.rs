@@ -17,11 +17,12 @@ pub fn run(
     fail_on: Option<Threshold>,
 ) -> anyhow::Result<u8> {
     let ImportFormat::Jsonl = format;
+    let analyzer = ctx.analyzer()?;
     let file = File::open(input).with_context(|| format!("cannot open {}", input.display()))?;
     let imported = read_jsonl(file).with_context(|| format!("rejected {}", input.display()))?;
     let mut store = ctx.open_store()?;
     store.insert_trace(&imported.record, TraceSource::Imported)?;
-    let findings = analyze_and_store(&mut store, &imported.record)?;
+    let findings = analyze_and_store(&analyzer, &mut store, &imported.record)?;
     outln!(
         "imported trace {} ({} events, {} value(s) redacted on import)",
         imported.record.trace.trace_id,

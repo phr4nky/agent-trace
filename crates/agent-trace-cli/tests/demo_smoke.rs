@@ -20,6 +20,7 @@ fn bin(data: &Path, args: &[&str]) -> Output {
         .arg("--no-color")
         .args(args)
         .env_remove("AGENT_TRACE_DATA_DIR")
+        .env_remove("AGENT_TRACE_CONFIG")
         .output()
         .expect("run agent-trace")
 }

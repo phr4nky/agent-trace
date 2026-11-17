@@ -19,6 +19,8 @@ integrity of evidence.
 | Database credentials / traffic | Passwords in URLs are redacted in all output and errors. TLS required by default for non-loopback PostgreSQL/MySQL/MariaDB (rustls, Mozilla roots). Prefer `AGENT_TRACE_DATABASE_URL` over a CLI flag |
 | Data sent to LLM providers | Only with explicit `--provider`. The CLI prints a notice; only lab prompts and fixtures (fake secrets) are sent. Keys come from the environment only, never stored or logged; API errors are redacted. Privileged tools stay mocks and policy-gated |
 | Injection relayed between agents | Sub-agent reports inherit `lower_trust` when the sub-agent saw untrusted content (taint propagation); AT-006 flags privileged actions downstream |
+| Agent acting on injected content through a real MCP server | `agent-trace proxy --mode enforce` denies privileged calls after untrusted content from a configured taint source entered the session, and outbound calls to non-allowlisted destinations, before they reach the server. Links are session context (medium confidence), never invented causes |
+| Weakened configuration (`agent-trace.toml`) | Config files only add to the built-in policy, so they cannot remove privileged or outbound tools; they can widen the destination allowlist. The file in use is printed on stderr. A CI gate should pass `--config` explicitly instead of trusting `./agent-trace.toml` from a checked-out branch. Invalid files are errors |
 | Trace tampering | **Not mitigated in v1.0** (no signatures). Planned: hash chains / signing |
 
 ## Residual risk
@@ -26,3 +28,4 @@ integrity of evidence.
 - Redaction is pattern based and can miss unknown secret formats.
 - SQLite is not encrypted at rest. Unix permissions restrict access to the owner (0700/0600).
 - Inferred facts: rules only use explicit links, but adapters can record wrong links. Findings show their evidence so you can check them.
+- The MCP proxy only sees MCP traffic. The client's built-in tools (for example a shell tool) and other servers are outside its view; a session can be harmful without anything suspicious in its trace.

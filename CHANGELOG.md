@@ -8,6 +8,37 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+**Upgrade notes:**
+
+- AT-002 moves to rule version 4 and AT-006 to version 3, so their finding IDs change.
+- `analyze`, `import`, `export`, `explore` and `demo run` now read `agent-trace.toml` from the
+  working directory or the data directory if one exists. Pass `--config` in CI to pin it.
+
+### Added
+
+- `agent-trace proxy -- <server command>`: an MCP proxy for stdio servers. Put it in the MCP
+  configuration of Claude Code, Cursor, Claude Desktop or any other client. It records every tool
+  call with the same lifecycle as the lab, records `tools/list`, `resources/read` and
+  `prompts/get` answers as lower-trust content, runs the rules live and, with `--mode enforce`,
+  answers denied calls with a tool error instead of forwarding them. See `docs/proxy.md`.
+- `agent-trace.toml` and the global `--config` option (also `AGENT_TRACE_CONFIG`): additional
+  privileged and outbound tools, destination allowlist entries, proxy mode, taint sources and
+  call timeout.
+- Tool names in the policy may use `*` wildcards; allowlist entries `*.example.com` allow
+  subdomains.
+- Library: `McpSession::connect_upstream`, `call_tool_raw`, `record_executed`, `record_result`,
+  `McpSession::connect_in_process` for any server handler, `record_gate`,
+  `LiveWriter::spawn_with`, `ToolPolicy::with_config`.
+
+### Changed
+
+- AT-002 and AT-006 report findings whose link is session context recorded by the proxy with
+  medium confidence and say so in the description.
+
+### Fixed
+
+- The AT-004 text for a denied action that was executed anyway contained runs of spaces.
+
 ## [1.2.0] - 2026-11-17
 
 Fixes from a multi-agent bug hunt on v1.1.0.

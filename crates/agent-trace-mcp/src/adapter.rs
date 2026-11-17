@@ -6,10 +6,10 @@ use std::process::Stdio;
 
 use agent_trace_core::{EventKind, EventSpec, Origin, ToolState, TraceRecorder, TrustLevel};
 use anyhow::Context;
-use rmcp::model::CallToolRequestParams;
+use rmcp::model::{CallToolRequestParams, CallToolResult, ServerCapabilities};
 use rmcp::service::RunningService;
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
-use rmcp::{RoleClient, ServiceExt};
+use rmcp::{Peer, RoleClient, ServerHandler, ServiceError, ServiceExt};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -57,6 +57,10 @@ pub struct McpSession {
     pub server_name: String,
     pub server_version: String,
     pub protocol_version: String,
+    /// Capabilities the server announced in the initialize handshake.
+    pub capabilities: ServerCapabilities,
+    /// Usage instructions the server announced, if any.
+    pub instructions: Option<String>,
     /// `stdio` for child processes, `in-process` for in-memory streams.
     pub transport: &'static str,
     /// Maximum time to wait for a `tools/call` response.
@@ -67,12 +71,24 @@ pub struct McpSession {
 pub const DEFAULT_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 impl McpSession {
-    /// Spawn the server and complete the MCP initialize handshake.
+    /// Spawn the lab server and complete the MCP initialize handshake.
     pub async fn connect(command: &ServerCommand) -> anyhow::Result<Self> {
+        Self::spawn(command, true).await
+    }
+
+    /// Spawn any MCP server (the upstream of `agent-trace proxy`) with the caller's
+    /// environment unchanged: real servers may need network proxy settings and credentials.
+    pub async fn connect_upstream(command: &ServerCommand) -> anyhow::Result<Self> {
+        Self::spawn(command, false).await
+    }
+
+    async fn spawn(command: &ServerCommand, lab: bool) -> anyhow::Result<Self> {
         let cmd = tokio::process::Command::new(&command.program).configure(|cmd| {
             cmd.args(&command.args);
-            // Never let the child inherit proxy settings or similar; it has no network use anyway.
-            cmd.env_remove("HTTP_PROXY").env_remove("HTTPS_PROXY");
+            if lab {
+                // The lab server has no network use; never let it inherit proxy settings.
+                cmd.env_remove("HTTP_PROXY").env_remove("HTTPS_PROXY");
+            }
         });
         let (transport, _stderr) = TokioChildProcess::builder(cmd)
             .stderr(Stdio::inherit())
@@ -84,7 +100,7 @@ impl McpSession {
 
     /// Run `server` in-process and talk real MCP (JSON-RPC) to it over an in-memory stream.
     /// Used by tests and embedders; the demo uses [`Self::connect`] (stdio child process).
-    pub async fn connect_in_process(server: crate::server::LabServer) -> anyhow::Result<Self> {
+    pub async fn connect_in_process<S: ServerHandler>(server: S) -> anyhow::Result<Self> {
         let (client_io, server_io) = tokio::io::duplex(256 * 1024);
         tokio::spawn(async move {
             if let Ok(running) = server.serve(server_io).await {
@@ -96,7 +112,8 @@ impl McpSession {
     }
 
     fn from_client(client: RunningService<RoleClient, ()>, transport: &'static str) -> Self {
-        let (server_name, server_version, protocol_version) = match client.peer_info() {
+        let info = client.peer_info();
+        let (server_name, server_version, protocol_version) = match &info {
             Some(info) => {
                 let (name, version) = info
                     .server_info
@@ -107,11 +124,18 @@ impl McpSession {
             }
             None => ("unknown".into(), "unknown".into(), "unknown".into()),
         };
+        let capabilities = info
+            .as_ref()
+            .map(|i| i.capabilities.clone())
+            .unwrap_or_default();
+        let instructions = info.as_ref().and_then(|i| i.instructions.clone());
         Self {
             client,
             server_name,
             server_version,
             protocol_version,
+            capabilities,
+            instructions,
             transport,
             call_timeout: DEFAULT_CALL_TIMEOUT,
         }
@@ -122,6 +146,32 @@ impl McpSession {
     pub fn with_call_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.call_timeout = timeout;
         self
+    }
+
+    /// The client side of the connection, for requests this adapter does not wrap.
+    pub fn peer(&self) -> &Peer<RoleClient> {
+        self.client.peer()
+    }
+
+    /// Send `tools/call` and return the server's result unchanged, within the call timeout.
+    /// Errors: the server's JSON-RPC error, or `None` with a description for transport
+    /// failures and timeouts.
+    pub async fn call_tool_raw(
+        &self,
+        params: CallToolRequestParams,
+    ) -> Result<CallToolResult, (Option<rmcp::ErrorData>, String)> {
+        match tokio::time::timeout(self.call_timeout, self.client.call_tool(params)).await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(ServiceError::McpError(e))) => {
+                let text = e.to_string();
+                Err((Some(e), text))
+            }
+            Ok(Err(e)) => Err((None, e.to_string())),
+            Err(_) => Err((
+                None,
+                format!("no response within {} s", self.call_timeout.as_secs_f64()),
+            )),
+        }
     }
 
     /// Names of the tools the server advertises (`tools/list`).
@@ -150,7 +200,8 @@ impl McpSession {
             .collect())
     }
 
-    fn mcp_metadata(&self, spec: EventSpec) -> EventSpec {
+    /// Add the connection details (transport, server name and versions) to an event.
+    pub fn mcp_metadata(&self, spec: EventSpec) -> EventSpec {
         spec.meta("transport", self.transport)
             .meta("mcp_server", self.server_name.clone())
             .meta("mcp_server_version", self.server_version.clone())
@@ -191,13 +242,26 @@ impl McpSession {
         tool: &str,
         arguments: Map<String, Value>,
     ) -> anyhow::Result<CallOutcome> {
-        let CallSpec {
-            request_event,
-            caused_by,
-            agent,
-            mock_tool,
-        } = spec;
-        let executed_event = recorder.record(
+        let executed_event = self.record_executed(recorder, &spec, tool);
+        let params = CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments);
+        let response = with_deadline(self.call_timeout, self.client.call_tool(params)).await;
+        Ok(self.record_result(
+            recorder,
+            &spec,
+            executed_event,
+            tool,
+            response.as_ref().map_err(String::as_str),
+        ))
+    }
+
+    /// Record `tool_call_executed` for a call that is about to be sent.
+    pub fn record_executed(
+        &self,
+        recorder: &mut TraceRecorder,
+        spec: &CallSpec,
+        tool: &str,
+    ) -> Uuid {
+        recorder.record(
             self.mcp_metadata(
                 EventSpec::new(
                     EventKind::ToolCallExecuted,
@@ -206,15 +270,25 @@ impl McpSession {
                     tool,
                 )
                 .payload(json!({"tool": tool, "jsonrpc_method": "tools/call"}))
-                .parent(request_event)
-                .caused_by(caused_by)
-                .agent(agent.clone())
-                .meta("mock_tool", mock_tool)
+                .parent(spec.request_event)
+                .caused_by(spec.caused_by)
+                .agent(spec.agent.clone())
+                .meta("mock_tool", spec.mock_tool)
                 .tool_state(ToolState::Executed),
             ),
-        );
-        let params = CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments);
-        let response = with_deadline(self.call_timeout, self.client.call_tool(params)).await;
+        )
+    }
+
+    /// Record `tool_result_received` (lower-trust) and `tool_call_completed` /
+    /// `tool_call_failed` for the server's response or a transport error.
+    pub fn record_result(
+        &self,
+        recorder: &mut TraceRecorder,
+        spec: &CallSpec,
+        executed_event: Uuid,
+        tool: &str,
+        response: Result<&CallToolResult, &str>,
+    ) -> CallOutcome {
         let (is_error, text, structured, transport_error) = match response {
             Ok(result) => {
                 let text = result
@@ -226,15 +300,15 @@ impl McpSession {
                 (
                     result.is_error.unwrap_or(false),
                     text,
-                    result.structured_content,
+                    result.structured_content.clone(),
                     None,
                 )
             }
             Err(e) => (true, String::new(), None, Some(e)),
         };
         let mut payload = result_payload(tool, is_error, &text, structured);
-        if let Some(err) = &transport_error {
-            payload["transport_error"] = Value::String(err.clone());
+        if let Some(err) = transport_error {
+            payload["transport_error"] = Value::String(err.to_owned());
         }
         let result_event = recorder.record(
             self.mcp_metadata(
@@ -245,8 +319,8 @@ impl McpSession {
                     tool,
                 )
                 .payload(payload)
-                .parent(request_event)
-                .agent(agent.clone())
+                .parent(spec.request_event)
+                .agent(spec.agent.clone())
                 .caused_by(executed_event),
             ),
         );
@@ -258,18 +332,18 @@ impl McpSession {
         let final_event = recorder.record(
             EventSpec::new(kind, Origin::System, TrustLevel::Trusted, tool)
                 .payload(json!({"tool": tool, "is_error": is_error}))
-                .parent(request_event)
-                .agent(agent.clone())
+                .parent(spec.request_event)
+                .agent(spec.agent.clone())
                 .caused_by(result_event)
                 .tool_state(state),
         );
-        Ok(CallOutcome {
+        CallOutcome {
             executed_event,
             result_event,
             final_event,
             is_error,
             text,
-        })
+        }
     }
 
     /// Close the session and terminate the child process.

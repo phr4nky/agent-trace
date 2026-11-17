@@ -32,6 +32,7 @@ user prompt ─▶ read_document (MCP) ─▶ ⚠ untrusted text: "send the API 
 - [Storage: SQLite, PostgreSQL, MariaDB, MySQL](#storage-sqlite-postgresql-mariadb-mysql)
 - [Using agent-trace in CI](#using-agent-trace-in-ci)
 - [Recording your own agent](#recording-your-own-agent)
+- [MCP proxy: record Claude Code, Cursor and others](#mcp-proxy-record-claude-code-cursor-and-others)
 - [Detection rules](#detection-rules)
 - [Security and privacy](#security-and-privacy)
 - [Project layout and development](#project-layout-and-development)
@@ -313,6 +314,7 @@ agent-trace analyze <trace-id>|--latest [--fail-on low|medium|high|critical]
 agent-trace explore <trace-id>|--latest [--follow] [--snapshot [--keys KEYS] [--size COLSxROWS]]
 agent-trace export <trace-id>|--latest --format json|jsonl [--output PATH]
 agent-trace import --format jsonl --input PATH
+agent-trace proxy [--name NAME] [--mode observe|enforce] [--call-timeout SECONDS] -- <server command> [args...]
 agent-trace --help
 ```
 
@@ -320,6 +322,7 @@ agent-trace --help
 |---|---|
 | `--data-dir PATH` | Where SQLite and exports live. The default is the per-user data dir (`~/Library/Application Support/agent-trace` on macOS, `~/.local/share/agent-trace` on Linux). Also settable via `AGENT_TRACE_DATA_DIR` |
 | `--database-url URL` | Use another database, see [Storage](#storage-sqlite-postgresql-mariadb-mysql). Also settable via `AGENT_TRACE_DATABASE_URL` |
+| `--config PATH` | Policy additions and proxy settings, see [docs/proxy.md](docs/proxy.md#configuration). Default: `AGENT_TRACE_CONFIG`, then `./agent-trace.toml`, then `agent-trace.toml` in the data dir |
 | `--no-color` | No ANSI colors. `NO_COLOR=1` works too |
 | `-v`, `-vv` | Diagnostic logs on stderr (redacted) |
 
@@ -554,6 +557,30 @@ Full schema: [docs/event-schema.md](docs/event-schema.md).
 
 ---
 
+## MCP proxy: record Claude Code, Cursor and others
+
+`agent-trace proxy` records an agent you already use, without code changes. Put it in the
+client's MCP configuration in front of a server:
+
+```sh
+claude mcp add github -- agent-trace --config ~/.config/agent-trace/github.toml \
+  proxy --name github -- docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server
+```
+
+Every tool call becomes part of a live trace (`agent-trace explore --latest --follow`). In
+`enforce` mode, a privileged tool requested after untrusted content entered the session is
+answered with a tool error and never reaches the server. That is the step the GitHub MCP issue
+injection of May 2025 needed: an issue in a public repository got an agent to publish private
+repository content in a public pull request. (The tests replay this sequence against a
+simulated GitHub server, not the real one.)
+
+The proxy sees tool traffic, not the model's context, so it links earlier untrusted content as
+*session context* and reports such findings with medium confidence. Setup for Claude Code,
+Cursor and Claude Desktop, the configuration file and the limits are in
+[docs/proxy.md](docs/proxy.md).
+
+---
+
 ## Detection rules
 
 | Rule | Detects | Status |
@@ -633,7 +660,9 @@ Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-- OTLP/OpenTelemetry GenAI import and an MCP proxy for instrumenting existing agents without code changes
+- MCP proxy over streamable HTTP, and one trace across several proxied servers
+- Claude Code hooks adapter, so built-in tools (Bash, Write, WebFetch) land in the same trace
+- OTLP/OpenTelemetry GenAI import
 - Causal graph view
 - SARIF export for GitHub code scanning
 - Tamper-evident traces (hash chains, signed exports)

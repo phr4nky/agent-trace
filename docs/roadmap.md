@@ -1,6 +1,14 @@
 # Roadmap
 
-## v1.2.0 (this release)
+## v1.3.0 (next release)
+
+- `agent-trace proxy`: record and optionally enforce the traffic between any MCP client and an
+  MCP server over stdio
+- `agent-trace.toml`: privileged and outbound tools (with `*` wildcards), destination allowlist
+  (with `*.domain`), proxy mode and taint sources; used by every command
+- AT-002/AT-006 report session-context links with medium confidence
+
+## v1.2.0
 
 - Fixes from a multi-agent bug hunt: three more outbound-allowlist bypasses, import memory and
   speed limits, redaction and truncation fixes, concurrent SQLite opens and migrations, loopback
@@ -29,8 +37,9 @@
 
 ## Next
 
+- MCP proxy over streamable HTTP; one trace across several proxied servers of a session
+- Claude Code hooks adapter for built-in tools (Bash, Write, WebFetch), in the same trace as MCP tools
 - OTLP ingestion with a versioned GenAI semantic-convention mapping
-- MCP proxy to record existing agents without code changes (stdio and streamable HTTP)
 - Interactive causal graph (Angular + Cytoscape.js or equivalent)
 - SARIF export and GitHub Code Scanning integration
 - Tamper evidence (hash-chained events, signed exports)

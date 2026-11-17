@@ -2,6 +2,7 @@ pub mod analyze;
 pub mod demo;
 pub mod export;
 pub mod import;
+pub mod proxy;
 pub mod trace;
 
 use std::path::{Path, PathBuf};
@@ -17,6 +18,8 @@ use crate::{EXIT_OK, TraceTarget};
 pub struct Context {
     pub data_dir: Option<PathBuf>,
     pub database_url: Option<String>,
+    /// `--config`; see [`crate::config::load`] for the lookup without it.
+    pub config: Option<PathBuf>,
     pub style: Style,
 }
 
@@ -53,6 +56,19 @@ impl Context {
         })
     }
 
+    /// The configuration (`agent-trace.toml`), or the built-in defaults.
+    pub fn config(&self) -> anyhow::Result<crate::config::Loaded> {
+        let data_dir = self.data_dir().ok();
+        crate::config::load(self.config.as_deref(), data_dir.as_deref())
+    }
+
+    /// The analyzer with the configured policy; names the config file on stderr.
+    pub fn analyzer(&self) -> anyhow::Result<Analyzer> {
+        let loaded = self.config()?;
+        loaded.announce();
+        Ok(loaded.analyzer())
+    }
+
     pub fn open_store(&self) -> anyhow::Result<Store> {
         let config = self.database()?;
         Ok(Store::connect(&config)?)
@@ -72,8 +88,11 @@ pub fn resolve_target(store: &mut Store, target: &TraceTarget) -> anyhow::Result
 }
 
 /// Run all rules and persist the findings (idempotent).
-pub fn analyze_and_store(store: &mut Store, record: &TraceRecord) -> anyhow::Result<Vec<Finding>> {
-    let analyzer = Analyzer::default();
+pub fn analyze_and_store(
+    analyzer: &Analyzer,
+    store: &mut Store,
+    record: &TraceRecord,
+) -> anyhow::Result<Vec<Finding>> {
     let findings = analyzer.analyze(record, time::OffsetDateTime::now_utc());
     let versions: Vec<(&str, u32)> = analyzer.rules().map(|r| (r.id(), r.version())).collect();
     Ok(store.save_findings(record.trace.trace_id, &versions, &findings)?)
@@ -97,7 +116,7 @@ pub fn explore(
     let record = store.load_trace(id)?;
     let mut findings = store.load_findings(id)?;
     if findings.is_empty() && record.trace.status != agent_trace_core::TraceStatus::Running {
-        findings = analyze_and_store(&mut store, &record)?;
+        findings = analyze_and_store(&ctx.analyzer()?, &mut store, &record)?;
     }
     match snapshot {
         Some((keys, size)) => out!(

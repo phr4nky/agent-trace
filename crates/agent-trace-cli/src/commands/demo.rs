@@ -31,6 +31,9 @@ pub struct DemoArgs {
 
 pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
     let s = &ctx.style;
+    let config = ctx.config()?;
+    config.announce();
+    let policy = config.policy();
     let lab = LabPaths::new(locate_lab_dir(args.lab_dir.as_deref())?);
     let names: Vec<&str> = match args.scenario {
         ScenarioArg::All => SCENARIO_NAMES.to_vec(),
@@ -60,11 +63,12 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
     };
     let options = RunOptions {
         deterministic: args.deterministic,
+        policy: policy.clone(),
         step_delay: args.step_delay,
-        ..RunOptions::default()
     };
     let llm_options = LlmRunOptions {
         max_turns: args.max_turns,
+        policy: policy.clone(),
         step_delay: args.step_delay,
         ..LlmRunOptions::default()
     };
@@ -116,7 +120,7 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
         .collect::<Result<Vec<_>, _>>()?;
 
     // Every event is persisted as soon as it is recorded (live), by a writer thread.
-    let writer = LiveWriter::spawn(store, TraceSource::Recorded, true);
+    let writer = LiveWriter::spawn_with(store, TraceSource::Recorded, Some(config.analyzer()));
     let mut produced: Vec<(String, String, Result<TraceRecord, String>)> = Vec::new();
     for (name, scenario) in scenarios {
         let result = match &llm {
@@ -197,7 +201,7 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
                 continue;
             }
         };
-        let findings = analyze_and_store(&mut store, &record)?;
+        let findings = analyze_and_store(&config.analyzer(), &mut store, &record)?;
         all_findings.extend(findings.iter().cloned());
         let base = format!("{name}-{}", record.trace.trace_id);
         let jsonl_path = exports.join(format!("{base}.jsonl"));
