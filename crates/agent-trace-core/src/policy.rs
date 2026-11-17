@@ -42,11 +42,55 @@ pub fn is_destination_key(key: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolPolicy {
     /// Tools that change state or act with the agent's privileges.
+    /// Entries may use `*` as a wildcard (see [`glob_match`]).
     pub privileged_tools: Vec<String>,
-    /// Tools that transmit data outside the local machine.
+    /// Tools that transmit data outside the local machine (`*` wildcards allowed).
     pub outbound_tools: Vec<String>,
-    /// Hosts outbound tools may send to.
+    /// Hosts outbound tools may send to. `*.example.com` allows every subdomain of
+    /// `example.com` (not `example.com` itself).
     pub destination_allowlist: Vec<String>,
+}
+
+/// User additions to the default [`ToolPolicy`] (the `[policy]` table of `agent-trace.toml`).
+/// Entries are added to the defaults; the defaults cannot be removed, so a config file can
+/// make the policy stricter for tool classes but only widen the destination allowlist.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyConfig {
+    /// Additional privileged tool names or patterns.
+    #[serde(default)]
+    pub privileged: Vec<String>,
+    /// Additional outbound tool names or patterns.
+    #[serde(default)]
+    pub outbound: Vec<String>,
+    /// Additional allowed destination hosts (`*.example.com` for subdomains).
+    #[serde(default)]
+    pub allow_destinations: Vec<String>,
+}
+
+/// Match `name` against `pattern`, where `*` matches any run of characters (also none).
+/// There are no other special characters; matching is case-sensitive, as MCP tool names are.
+pub fn glob_match(pattern: &str, name: &str) -> bool {
+    let (p, n) = (pattern.as_bytes(), name.as_bytes());
+    let (mut pi, mut ni) = (0, 0);
+    // Position after the last `*` in the pattern and the name position it was tried at.
+    let mut star: Option<(usize, usize)> = None;
+    while ni < n.len() {
+        if pi < p.len() && p[pi] == b'*' {
+            star = Some((pi + 1, ni));
+            pi += 1;
+        } else if pi < p.len() && p[pi] == n[ni] {
+            pi += 1;
+            ni += 1;
+        } else if let Some((sp, sn)) = star {
+            pi = sp;
+            ni = sn + 1;
+            star = Some((sp, sn + 1));
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|&c| c == b'*')
 }
 
 impl Default for ToolPolicy {
@@ -94,12 +138,29 @@ pub struct PolicyOutcome {
 }
 
 impl ToolPolicy {
+    /// The default policy plus the additions of `config`.
+    pub fn with_config(mut self, config: &PolicyConfig) -> Self {
+        for (list, extra) in [
+            (&mut self.privileged_tools, &config.privileged),
+            (&mut self.outbound_tools, &config.outbound),
+            (&mut self.destination_allowlist, &config.allow_destinations),
+        ] {
+            for entry in extra {
+                let entry = entry.trim();
+                if !entry.is_empty() && !list.iter().any(|e| e == entry) {
+                    list.push(entry.to_owned());
+                }
+            }
+        }
+        self
+    }
+
     pub fn is_privileged(&self, tool: &str) -> bool {
-        self.privileged_tools.iter().any(|t| t == tool) || self.is_outbound(tool)
+        self.privileged_tools.iter().any(|t| glob_match(t, tool)) || self.is_outbound(tool)
     }
 
     pub fn is_outbound(&self, tool: &str) -> bool {
-        self.outbound_tools.iter().any(|t| t == tool)
+        self.outbound_tools.iter().any(|t| glob_match(t, tool))
     }
 
     /// The first destination argument of an outbound call that is not allowlisted.
@@ -139,9 +200,20 @@ impl ToolPolicy {
 
     pub fn destination_allowed(&self, destination: &str) -> bool {
         host_of(destination).is_some_and(|host| {
-            self.destination_allowlist
-                .iter()
-                .any(|allowed| allowed.eq_ignore_ascii_case(&host))
+            self.destination_allowlist.iter().any(|allowed| {
+                match allowed.strip_prefix("*.") {
+                    // Subdomains only: `*.example.com` allows `a.example.com`, and neither
+                    // `example.com` nor `evilexample.com`.
+                    Some(parent) if !parent.is_empty() => {
+                        host.len().checked_sub(parent.len() + 1).is_some_and(|dot| {
+                            host.as_bytes()[dot] == b'.'
+                                && host[dot + 1..].eq_ignore_ascii_case(parent)
+                                && dot > 0
+                        })
+                    }
+                    _ => allowed.eq_ignore_ascii_case(&host),
+                }
+            })
         })
     }
 
@@ -380,6 +452,76 @@ mod tests {
             p.evaluate("send_email", args.as_object().unwrap()).decision,
             Decision::Allow
         );
+    }
+
+    #[test]
+    fn glob_patterns() {
+        for (p, n, want) in [
+            ("create_*", "create_pull_request", true),
+            ("create_*", "create_", true),
+            ("create_*", "list_issues", false),
+            ("*_file", "write_file", true),
+            ("*_file*", "push_files", true),
+            ("a*b*c", "aXbYc", true),
+            ("a*b*c", "aXbY", false),
+            ("*", "", true),
+            ("", "", true),
+            ("", "x", false),
+            ("exact", "exact", true),
+            ("exact", "Exact", false),
+            ("**x", "abx", true),
+        ] {
+            assert_eq!(glob_match(p, n), want, "{p} vs {n}");
+        }
+    }
+
+    #[test]
+    fn config_adds_to_the_defaults() {
+        let config = PolicyConfig {
+            privileged: vec!["create_*".into(), "push_files".into()],
+            outbound: vec!["send_webhook".into(), "post_*".into()],
+            allow_destinations: vec!["*.corp.example".into(), " ".into()],
+        };
+        let p = ToolPolicy::default().with_config(&config);
+        assert!(p.is_privileged("create_pull_request"));
+        assert!(p.is_privileged("push_files"));
+        assert!(p.is_privileged("run_command"), "defaults are kept");
+        assert!(p.is_outbound("post_message"));
+        assert!(
+            p.is_privileged("post_message"),
+            "outbound tools are privileged"
+        );
+        assert!(!p.is_privileged("get_issue"));
+        assert_eq!(
+            p.outbound_tools
+                .iter()
+                .filter(|t| *t == "send_webhook")
+                .count(),
+            1,
+            "no duplicates"
+        );
+        assert!(!p.destination_allowlist.iter().any(|d| d.trim().is_empty()));
+    }
+
+    #[test]
+    fn wildcard_destinations_allow_subdomains_only() {
+        let p = ToolPolicy::default().with_config(&PolicyConfig {
+            allow_destinations: vec!["*.corp.example".into()],
+            ..PolicyConfig::default()
+        });
+        assert!(p.destination_allowed("https://api.corp.example/x"));
+        assert!(p.destination_allowed("https://A.B.CORP.example/x"));
+        assert!(p.destination_allowed("ops@mail.corp.example"));
+        assert!(!p.destination_allowed("https://corp.example/x"));
+        assert!(!p.destination_allowed("https://evilcorp.example/x"));
+        assert!(!p.destination_allowed("https://corp.example.evil.invalid/x"));
+        assert!(!p.destination_allowed("https://.corp.example/x"));
+        // A bare `*.` entry allows nothing.
+        let p = ToolPolicy::default().with_config(&PolicyConfig {
+            allow_destinations: vec!["*.".into()],
+            ..PolicyConfig::default()
+        });
+        assert!(!p.destination_allowed("https://marker.invalid/"));
     }
 
     #[test]

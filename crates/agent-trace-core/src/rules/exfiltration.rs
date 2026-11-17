@@ -138,12 +138,14 @@ impl Rule for BlockedActionRule {
                         evidence.extend(outcome_ids);
                         (
                             format!(
-                                "Policy denied `{tool}` at event #{}: {reason}. An execution of the                                  same request was recorded afterwards, so the denial was not enforced.",
+                                "Policy denied `{tool}` at event #{}: {reason}. An execution of the \
+                                 same request was recorded afterwards, so the denial was not enforced.",
                                 decision.sequence
                             ),
                             Severity::High,
                             AttemptStatus::Executed,
-                            "Check why the action ran despite the policy decision (audit-only or                              fail-open gate) and enforce denials before execution.",
+                            "Check why the action ran despite the policy decision (audit-only or \
+                             fail-open gate) and enforce denials before execution.",
                         )
                     }
                     None => (

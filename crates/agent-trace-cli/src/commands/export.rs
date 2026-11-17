@@ -6,7 +6,7 @@ use agent_trace_storage::{create_private_file, write_json_report, write_jsonl};
 use super::{Context, analyze_and_store, resolve_target};
 use crate::{EXIT_OK, ExportFormat, TraceTarget};
 
-/// Export is always redacted; there is intentionally no raw-output flag in v1.0.
+/// Export is always redacted; there is intentionally no raw-output flag.
 pub fn run(
     ctx: &Context,
     target: &TraceTarget,
@@ -18,7 +18,7 @@ pub fn run(
     let record = store.load_trace(id)?;
     let mut findings = store.load_findings(id)?;
     if findings.is_empty() {
-        findings = analyze_and_store(&mut store, &record)?;
+        findings = analyze_and_store(&ctx.analyzer()?, &mut store, &record)?;
     }
     let writer: Box<dyn Write> = match output {
         Some(path) => Box::new(BufWriter::new(create_private_file(path)?)),

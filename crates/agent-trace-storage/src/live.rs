@@ -26,12 +26,18 @@ pub struct LiveWriter {
 }
 
 impl LiveWriter {
-    /// Start the writer thread. With `analyze`, findings are updated after every event.
+    /// Start the writer thread. With `analyze`, findings are updated after every event
+    /// with the default policy.
     pub fn spawn(store: Store, source: TraceSource, analyze: bool) -> Self {
+        Self::spawn_with(store, source, analyze.then(Analyzer::default))
+    }
+
+    /// Start the writer thread; with an analyzer, findings are updated after every event.
+    pub fn spawn_with(store: Store, source: TraceSource, analyzer: Option<Analyzer>) -> Self {
         let (tx, rx) = channel();
         let handle = std::thread::Builder::new()
             .name("agent-trace-live-writer".into())
-            .spawn(move || run(store, rx, source, analyze))
+            .spawn(move || run(store, rx, source, analyzer))
             .expect("spawn live writer thread");
         Self { tx, handle }
     }
@@ -63,10 +69,12 @@ fn run(
     mut store: Store,
     rx: Receiver<Msg>,
     source: TraceSource,
-    analyze: bool,
+    analyzer: Option<Analyzer>,
 ) -> (Store, Result<(), StorageError>) {
-    let analyzer = Analyzer::default();
-    let versions: Vec<(&str, u32)> = analyzer.rules().map(|r| (r.id(), r.version())).collect();
+    let versions: Vec<(&str, u32)> = analyzer
+        .iter()
+        .flat_map(|a| a.rules().map(|r| (r.id(), r.version())))
+        .collect();
     let mut open: HashMap<Uuid, TraceRecord> = HashMap::new();
     let mut first_error: Option<StorageError> = None;
 
@@ -86,7 +94,7 @@ fn run(
                 store.append_event(&event)?;
                 if let Some(record) = open.get_mut(&event.trace_id) {
                     record.events.push(*event);
-                    if analyze {
+                    if let Some(analyzer) = &analyzer {
                         let findings = analyzer.analyze(record, time::OffsetDateTime::now_utc());
                         store.save_findings(record.trace.trace_id, &versions, &findings)?;
                     }
@@ -96,7 +104,7 @@ fn run(
                 store.update_trace(&trace)?;
                 if let Some(mut record) = open.remove(&trace.trace_id) {
                     record.trace = *trace;
-                    if analyze {
+                    if let Some(analyzer) = &analyzer {
                         let findings = analyzer.analyze(&record, time::OffsetDateTime::now_utc());
                         store.save_findings(record.trace.trace_id, &versions, &findings)?;
                     }

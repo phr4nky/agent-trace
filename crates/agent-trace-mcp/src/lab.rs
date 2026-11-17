@@ -554,7 +554,6 @@ pub async fn gated_tool_call(
     if gate.simulated {
         spec = simulated(spec);
     }
-    let request = rec.record(spec);
     let outcome = match &gate.offered_tools {
         Some(offered) if !offered.iter().any(|t| t == tool) => PolicyOutcome {
             decision: Decision::Deny,
@@ -562,30 +561,9 @@ pub async fn gated_tool_call(
         },
         _ => policy.evaluate(tool, arguments),
     };
-    let denied = outcome.decision == Decision::Deny;
-    let decision = rec.record(
-        EventSpec::new(
-            EventKind::ToolPolicyDecision,
-            Origin::Policy,
-            TrustLevel::Trusted,
-            tool,
-        )
-        .payload(json!({
-            "tool": tool,
-            "decision": outcome.decision,
-            "reason": outcome.reason,
-            "outbound_request_sent": false,
-        }))
-        .agent(gate.agent.clone())
-        .parent(request)
-        .caused_by(request)
-        .tool_state(if denied {
-            ToolState::Blocked
-        } else {
-            ToolState::PolicyDecision
-        }),
-    );
-    if denied {
+    let (request, decision) =
+        record_gate(rec, spec, gate.agent.clone(), tool, &outcome, Map::new());
+    if outcome.decision == Decision::Deny {
         return Ok(GateOutcome {
             request,
             decision,
@@ -616,6 +594,48 @@ pub async fn gated_tool_call(
         is_error: result.is_error,
         text: result.text,
     })
+}
+
+/// Record a `tool_call_requested` event (`request`, built by the caller) and the
+/// `tool_policy_decision` on it. `extra` is added to the decision payload.
+/// Returns the ids of the request and the decision.
+pub fn record_gate(
+    rec: &mut TraceRecorder,
+    request: EventSpec,
+    agent: Option<String>,
+    tool: &str,
+    outcome: &PolicyOutcome,
+    extra: Map<String, Value>,
+) -> (Uuid, Uuid) {
+    let request = rec.record(request);
+    let denied = outcome.decision == Decision::Deny;
+    let mut payload = json!({
+        "tool": tool,
+        "decision": outcome.decision,
+        "reason": outcome.reason,
+        "outbound_request_sent": false,
+    });
+    if let Value::Object(map) = &mut payload {
+        map.extend(extra);
+    }
+    let decision = rec.record(
+        EventSpec::new(
+            EventKind::ToolPolicyDecision,
+            Origin::Policy,
+            TrustLevel::Trusted,
+            tool,
+        )
+        .payload(payload)
+        .agent(agent)
+        .parent(request)
+        .caused_by(request)
+        .tool_state(if denied {
+            ToolState::Blocked
+        } else {
+            ToolState::PolicyDecision
+        }),
+    );
+    (request, decision)
 }
 
 /// Resolve the lab directory: explicit path, `AGENT_TRACE_LAB_DIR`, the source checkout,

@@ -3,6 +3,7 @@
 #[macro_use]
 mod output;
 mod commands;
+mod config;
 mod logging;
 mod tui;
 
@@ -39,6 +40,11 @@ pub struct Cli {
     /// Examples: sqlite:///path/traces.sqlite3, postgres://user@host/db, mariadb://user@host/db
     #[arg(long, global = true, value_name = "URL")]
     database_url: Option<String>,
+
+    /// Config file (default: $AGENT_TRACE_CONFIG, ./agent-trace.toml, or agent-trace.toml
+    /// in the data dir). It adds tools and destinations to the default policy.
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
 
     /// Disable ANSI colors (also honored: NO_COLOR environment variable).
     #[arg(long, global = true)]
@@ -112,6 +118,24 @@ enum Command {
         #[arg(long, value_enum)]
         fail_on: Option<Threshold>,
     },
+    /// Run between an MCP client and an MCP server, record every tool call and check it
+    /// against the policy. Put it in the client's MCP config in place of the server:
+    /// `agent-trace proxy --name github -- <server command> [args...]`.
+    Proxy {
+        /// Name of the proxied server (default: the server program's file name).
+        #[arg(long)]
+        name: Option<String>,
+        /// observe: record only (default). enforce: answer denied calls with a tool error
+        /// instead of forwarding them. Overrides `mode` in agent-trace.toml.
+        #[arg(long, value_enum)]
+        mode: Option<ProxyModeArg>,
+        /// Seconds to wait for the upstream server's answer to a tool call (default 300).
+        #[arg(long, value_name = "SECONDS")]
+        call_timeout: Option<u64>,
+        /// The upstream MCP server command, after `--`.
+        #[arg(last = true, required = true, value_name = "COMMAND")]
+        command: Vec<String>,
+    },
     /// Internal: run the local lab MCP server on stdio.
     #[command(hide = true)]
     LabServer {
@@ -158,6 +182,12 @@ enum DemoCommand {
         #[arg(long, value_enum)]
         fail_on: Option<Threshold>,
     },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ProxyModeArg {
+    Observe,
+    Enforce,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -233,11 +263,29 @@ fn main() -> ExitCode {
     let ctx = commands::Context {
         data_dir: cli.data_dir.clone(),
         database_url: cli.database_url.clone(),
+        config: cli.config.clone(),
         style: output::Style::new(color),
     };
     let result =
         match cli.command {
             Command::LabServer { documents } => commands::lab_server(&documents).map(|_| EXIT_OK),
+            Command::Proxy {
+                name,
+                mode,
+                call_timeout,
+                command,
+            } => commands::proxy::run(
+                &ctx,
+                commands::proxy::ProxyArgs {
+                    name,
+                    mode: mode.map(|m| match m {
+                        ProxyModeArg::Observe => agent_trace_mcp::ProxyMode::Observe,
+                        ProxyModeArg::Enforce => agent_trace_mcp::ProxyMode::Enforce,
+                    }),
+                    call_timeout_secs: call_timeout,
+                    command,
+                },
+            ),
             Command::Demo {
                 command:
                     DemoCommand::Run {
