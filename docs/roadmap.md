@@ -63,7 +63,6 @@
 
 ## In review
 
-- Retention and redaction configuration, declarative rules (#15)
 - OTLP ingestion with a versioned GenAI semantic-convention mapping (#16)
 
 ## Next
