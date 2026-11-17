@@ -836,7 +836,11 @@ Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-- A local OTLP/HTTP receiver, and mappings for OpenInference and OpenLLMetry attributes
+- Canary tokens: decoy secrets that turn an exfiltration indicator into proof
+- Rug-pull protection: pin MCP tool descriptions and alert when they change
+- Approval mode: ask a human before risky calls, task-scoped permissions
+- A library of known agent attacks as a replay suite
+- OWASP LLM Top 10 and MITRE ATLAS tags; compliance evidence reports; SIEM export (OCSF)
 
 See [docs/roadmap.md](docs/roadmap.md).
 
