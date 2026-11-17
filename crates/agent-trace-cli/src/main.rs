@@ -126,6 +126,29 @@ enum Command {
         /// (default: trace-<id>.jsonl, the layout `--format jsonl` writes).
         #[arg(long, value_name = "URI")]
         artifact_uri: Option<String>,
+        /// JSONL only: sign the export with your signing key (see `agent-trace keys`).
+        #[arg(long)]
+        sign: bool,
+        /// Signing key file (default: $AGENT_TRACE_SIGNING_KEY or the data directory).
+        #[arg(long, value_name = "PATH", requires = "sign")]
+        key: Option<PathBuf>,
+    },
+    /// Check that a JSONL export is unchanged (hash chain) and who signed it.
+    Verify {
+        /// The JSONL file.
+        file: PathBuf,
+        /// A trusted signer: hex public key or a .pub file. Repeatable. Your own signing key
+        /// is always trusted.
+        #[arg(long, value_name = "KEY")]
+        public_key: Vec<String>,
+        /// Fail if the file is not signed.
+        #[arg(long)]
+        require_signature: bool,
+    },
+    /// Manage the key that signs exports.
+    Keys {
+        #[command(subcommand)]
+        command: KeysCommand,
     },
     /// Convert JSONL trace files into one SARIF file for GitHub Code Scanning (validated,
     /// redacted, findings recomputed; nothing is stored).
@@ -348,6 +371,21 @@ pub enum ProviderArg {
 }
 
 #[derive(Debug, Subcommand)]
+enum KeysCommand {
+    /// Create an Ed25519 signing key (never overwrites an existing key).
+    Generate {
+        /// Key file (default: $AGENT_TRACE_SIGNING_KEY or <data dir>/keys/signing-key.pk8).
+        #[arg(long, value_name = "PATH")]
+        key: Option<PathBuf>,
+    },
+    /// Print the key id and public key.
+    Show {
+        #[arg(long, value_name = "PATH")]
+        key: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum TraceCommand {
     /// List stored traces in creation order.
     List,
@@ -545,18 +583,32 @@ fn main() -> ExitCode {
             format,
             output,
             artifact_uri,
+            sign,
+            key,
         } => commands::export::run(
             &ctx,
             &target,
             format,
             output.as_deref(),
             artifact_uri.as_deref(),
+            sign.then_some(key.as_deref()),
         ),
         Command::Sarif {
             inputs,
             output,
             fail_on,
         } => commands::sarif::run(&ctx, &inputs, output.as_deref(), fail_on),
+        Command::Verify {
+            file,
+            public_key,
+            require_signature,
+        } => commands::keys::verify(&ctx, &file, &public_key, require_signature),
+        Command::Keys {
+            command: KeysCommand::Generate { key },
+        } => commands::keys::generate(&ctx, key.as_deref()),
+        Command::Keys {
+            command: KeysCommand::Show { key },
+        } => commands::keys::show(&ctx, key.as_deref()),
         Command::Import {
             format,
             input,

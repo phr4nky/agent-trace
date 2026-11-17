@@ -4,6 +4,7 @@ pub mod export;
 pub mod graph;
 pub mod hook;
 pub mod import;
+pub mod keys;
 pub mod proxy;
 pub mod replay;
 pub mod sarif;

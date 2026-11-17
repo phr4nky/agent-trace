@@ -103,7 +103,25 @@ was never finished (crash or kill).
 ## JSONL
 
 One JSON object per line with a `record_type` tag: first `trace`, then `event`s in sequence order,
-then optional `finding`s. Finding lines are ignored on import (findings are recomputed).
+then optional `finding`s, then (in exports) one `integrity` record. Finding lines are ignored on
+import (findings are recomputed).
+
+### Integrity record
+
+```json
+{"record_type":"integrity","version":1,"algorithm":"sha256-chain","lines":18,
+ "head":"<64 hex>","checkpoints":[{"line":256,"hash":"<64 hex>"}],
+ "signature":{"algorithm":"ed25519","key_id":"<16 hex>","public_key":"<64 hex>","value":"<128 hex>"}}
+```
+
+- `h0 = SHA-256("agent-trace-chain-v1")`; for every non-blank line before the record, in order,
+  `hᵢ = SHA-256(hᵢ₋₁ ‖ line)` over the exact bytes of the line without its line break. `lines` is
+  the number of chained lines, `head` the last `hᵢ`, `checkpoints` every 256th `hᵢ`.
+- `signature` (optional): Ed25519 over
+  `"agent-trace-integrity-v1\n" ‖ trace_id ‖ "\n" ‖ lines ‖ "\n" ‖ head`. `key_id` is the first 16
+  hex digits of SHA-256 of the public key.
+- The record must be the last record. Files without one (hand-written traces) are accepted; a
+  record whose chain or signature does not match rejects the file.
 
 ## Migration strategy
 

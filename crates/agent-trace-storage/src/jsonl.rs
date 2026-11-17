@@ -5,6 +5,7 @@
 //! is re-redacted, size limits are enforced and the trace invariants are validated.
 //! Imported findings are ignored; findings are always recomputed locally.
 
+use crate::integrity::{Chain, IntegrityRecord, SigningKey, Verified};
 use std::io::{BufRead, Read, Write};
 
 use agent_trace_core::rules::record_content_indicators;
@@ -35,6 +36,8 @@ pub enum JsonlRecord {
     Trace(Trace),
     Event(Event),
     Finding(Finding),
+    /// Hash chain (and optional signature) over all previous lines; last line of an export.
+    Integrity(IntegrityRecord),
 }
 
 /// Result of an import.
@@ -45,27 +48,46 @@ pub struct Imported {
     pub ignored_findings: usize,
     /// Number of values redacted during import.
     pub redactions: u64,
+    /// The file's integrity record, verified (`None`: the file has none).
+    pub integrity: Option<Verified>,
 }
 
-/// Write a trace (and its findings) as JSONL. Values are redacted again defensively.
+/// Write a trace (and its findings) as JSONL. Values are redacted again defensively. The
+/// last line is an integrity record (hash chain over all other lines, see [`crate::integrity`]).
 pub fn write_jsonl(
-    mut out: impl Write,
+    out: impl Write,
     record: &TraceRecord,
     findings: &[Finding],
 ) -> Result<(), StorageError> {
+    write_jsonl_signed(out, record, findings, None)
+}
+
+/// [`write_jsonl`], with the integrity record signed by `key`.
+pub fn write_jsonl_signed(
+    mut out: impl Write,
+    record: &TraceRecord,
+    findings: &[Finding],
+    key: Option<&SigningKey>,
+) -> Result<(), StorageError> {
     let record = redact_record(record).0;
-    let mut line = |rec: &JsonlRecord| -> Result<(), StorageError> {
-        serde_json::to_writer(&mut out, rec)?;
+    let mut chain = Chain::default();
+    let mut line = |rec: &JsonlRecord, chain: &mut Chain| -> Result<(), StorageError> {
+        let text = serde_json::to_vec(rec)?;
+        chain.push(&text);
+        out.write_all(&text)?;
         out.write_all(b"\n")?;
         Ok(())
     };
-    line(&JsonlRecord::Trace(record.trace.clone()))?;
+    line(&JsonlRecord::Trace(record.trace.clone()), &mut chain)?;
     for event in &record.events {
-        line(&JsonlRecord::Event(event.clone()))?;
+        line(&JsonlRecord::Event(event.clone()), &mut chain)?;
     }
     for finding in findings {
-        line(&JsonlRecord::Finding(finding.clone()))?;
+        line(&JsonlRecord::Finding(finding.clone()), &mut chain)?;
     }
+    let integrity = JsonlRecord::Integrity(chain.record(record.trace.trace_id, key));
+    serde_json::to_writer(&mut out, &integrity)?;
+    out.write_all(b"\n")?;
     out.flush()?;
     Ok(())
 }
@@ -92,6 +114,8 @@ fn read_jsonl_limited(
     let mut ignored_findings = 0;
     let mut line_no = 0usize;
     let mut buf = Vec::new();
+    let mut chain = Chain::default();
+    let mut integrity: Option<Verified> = None;
     loop {
         buf.clear();
         line_no += 1;
@@ -121,10 +145,22 @@ fn read_jsonl_limited(
         if text.trim().is_empty() {
             continue;
         }
+        if integrity.is_some() {
+            return Err(StorageError::Import {
+                line: line_no,
+                message: "records after the integrity record (the file was extended after \
+                          export)"
+                    .into(),
+            });
+        }
         let rec: JsonlRecord = serde_json::from_str(text).map_err(|e| StorageError::Import {
             line: line_no,
             message: format!("malformed record: {e}"),
         })?;
+        if !matches!(rec, JsonlRecord::Integrity(_)) {
+            let raw = text.strip_suffix('\n').unwrap_or(text);
+            chain.push(raw.strip_suffix('\r').unwrap_or(raw).as_bytes());
+        }
         match rec {
             JsonlRecord::Trace(t) => {
                 if trace.is_some() {
@@ -171,6 +207,24 @@ fn read_jsonl_limited(
                 events.push(e);
             }
             JsonlRecord::Finding(_) => ignored_findings += 1,
+            JsonlRecord::Integrity(record) => {
+                let trace_id = trace
+                    .as_ref()
+                    .map(|t| t.trace_id)
+                    .ok_or(StorageError::Import {
+                        line: line_no,
+                        message: "integrity record before the trace header".into(),
+                    })?;
+                integrity =
+                    Some(
+                        record
+                            .verify(&chain, trace_id)
+                            .map_err(|e| StorageError::Import {
+                                line: line_no,
+                                message: e.to_string(),
+                            })?,
+                    );
+            }
         }
     }
     let trace = trace.ok_or(StorageError::Import {
@@ -207,6 +261,7 @@ fn read_jsonl_limited(
         record,
         ignored_findings,
         redactions,
+        integrity,
     })
 }
 

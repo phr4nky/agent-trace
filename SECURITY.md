@@ -28,7 +28,9 @@ JSONL traces. Relevant security properties:
   sensitive production traces without additional controls.
 - **SQLite is not encrypted at rest.** Protect the data directory like any other sensitive file.
 - **Rules produce indicators, not proof.** False positives and false negatives are expected.
-- **Trace tampering:** traces are not signed in v1.0. An attacker with write access to the data
-  directory can alter evidence.
+- **Trace tampering:** JSONL exports carry a hash chain and can be signed (`export --sign`,
+  `agent-trace verify`). The trace database is not protected: an attacker with write access to
+  the data directory can alter stored traces. Export and sign evidence promptly and keep the
+  signing key outside the data directory if the data directory is not trusted.
 
 See [docs/security-model.md](docs/security-model.md) for the threat model.

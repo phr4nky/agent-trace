@@ -4,6 +4,8 @@
 
 - `agent-trace sarif FILE...` and `export --format sarif`: SARIF 2.1.0 for GitHub Code Scanning,
   alerts at the line of the risky tool request in the trace file, evidence as a code flow
+- Tamper evidence: every JSONL export ends with a SHA-256 hash chain; `export --sign` adds an
+  Ed25519 signature; `agent-trace verify` and `import` reject changed files
 
 ## v1.4.0
 
@@ -58,5 +60,4 @@
 ## Next
 
 - OTLP ingestion with a versioned GenAI semantic-convention mapping
-- Tamper evidence (hash-chained events, signed exports)
 - Retention and redaction configuration, rule/plugin SDK
