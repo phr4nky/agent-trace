@@ -123,7 +123,8 @@ enum Command {
     /// against the policy. Put it in the client's MCP config in place of the server:
     /// `agent-trace proxy --name github -- <server command> [args...]`.
     Proxy {
-        /// Name of the proxied server (default: the server program's file name).
+        /// Name of the proxied server (default: the server program's file name, or the
+        /// URL's host).
         #[arg(long)]
         name: Option<String>,
         /// observe: record only (default). enforce: answer denied calls with a tool error
@@ -133,8 +134,27 @@ enum Command {
         /// Seconds to wait for the upstream server's answer to a tool call (default 300).
         #[arg(long, value_name = "SECONDS")]
         call_timeout: Option<u64>,
+        /// Upstream MCP server over streamable HTTP (https, or http to localhost) instead of
+        /// a command.
+        #[arg(long, value_name = "URL", conflicts_with = "command")]
+        url: Option<String>,
+        /// Environment variable holding a bearer token for --url (never pass the token
+        /// itself on the command line).
+        #[arg(long, value_name = "VAR", requires = "url")]
+        bearer_token_env: Option<String>,
+        /// Request header for --url whose value comes from an environment variable,
+        /// as NAME=VAR, e.g. X-Api-Key=MY_API_KEY. Repeatable.
+        #[arg(long, value_name = "NAME=VAR", requires = "url")]
+        header_env: Vec<String>,
+        /// Session key: proxies with the same key write one trace. Default: the MCP client
+        /// process that started the proxy ($AGENT_TRACE_SESSION also sets a key).
+        #[arg(long, value_name = "KEY", conflicts_with = "no_session")]
+        session: Option<String>,
+        /// Record this proxy in a trace of its own.
+        #[arg(long)]
+        no_session: bool,
         /// The upstream MCP server command, after `--`.
-        #[arg(last = true, required = true, value_name = "COMMAND")]
+        #[arg(last = true, required_unless_present = "url", value_name = "COMMAND")]
         command: Vec<String>,
     },
     /// Claude Code hook: record the hook event on stdin in the session's trace and, in
@@ -305,6 +325,11 @@ fn main() -> ExitCode {
                 name,
                 mode,
                 call_timeout,
+                url,
+                bearer_token_env,
+                header_env,
+                session,
+                no_session,
                 command,
             } => commands::proxy::run(
                 &ctx,
@@ -313,6 +338,11 @@ fn main() -> ExitCode {
                     mode: mode.map(ProxyModeArg::into_mode),
                     call_timeout_secs: call_timeout,
                     command,
+                    url,
+                    bearer_token_env,
+                    header_env,
+                    session,
+                    no_session,
                 },
             ),
             Command::Demo {

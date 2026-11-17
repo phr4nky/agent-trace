@@ -1,21 +1,20 @@
 //! `agent-trace hook`: the command Claude Code runs for each hook event.
 //!
-//! Each invocation is a new process: it reads the event from stdin, takes the session's lock
-//! (parallel tool calls fire hooks concurrently), continues the session's trace in the store,
-//! runs the rules and, for a denied PreToolUse call, prints Claude Code's deny decision on
+//! Each invocation is a new process: it reads the event from stdin and continues the
+//! session's trace through [`SharedTrace`] (which locks it, because parallel tool calls fire
+//! hooks concurrently), runs the rules and, for a denied PreToolUse call, prints Claude Code's deny decision on
 //! stdout. Nothing else is written to stdout.
 
-use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::path::PathBuf;
 
-use agent_trace_core::{TraceRecord, TraceRecorder};
+use agent_trace_core::TraceAccess;
 use agent_trace_mcp::ProxyMode;
-use agent_trace_storage::{StorageError, TraceSource, create_private_dir};
+use agent_trace_storage::SharedTrace;
 use anyhow::Context as _;
 use serde_json::{Value, json};
 
-use super::{Context, analyze_and_store};
+use super::Context;
 use crate::EXIT_OK;
 use crate::config::{DEFAULT_HOOK_TAINT_SOURCES, OnError};
 use crate::hooks::{self, HookInput, HookOutput, HookSettings};
@@ -112,49 +111,26 @@ fn record(
     loaded: &crate::config::Loaded,
 ) -> anyhow::Result<HookOutput> {
     let trace_id = hooks::trace_id_for(&input.session_id);
-    let _lock = lock_session(ctx, trace_id)?;
-    let mut store = ctx.open_store()?;
-    let (mut rec, is_new) = match store.load_trace(trace_id) {
-        Ok(record) => (TraceRecorder::resume(record), false),
-        Err(StorageError::TraceNotFound(_)) => (hooks::new_recorder(input), true),
-        Err(e) => return Err(e.into()),
-    };
-    let before = if is_new { 0 } else { rec.events().len() };
-    let output = hooks::apply(&mut rec, input, settings);
-    if is_new {
-        store.begin_trace(rec.trace(), TraceSource::Recorded)?;
-    }
-    for event in &rec.events()[before..] {
-        store.append_event(event)?;
-    }
-    store.update_trace(rec.trace())?;
-    let record = TraceRecord {
-        trace: rec.trace().clone(),
-        events: rec.events().to_vec(),
-    };
-    analyze_and_store(&loaded.analyzer(), &mut store, &record)?;
+    let first = hooks::new_recorder(input);
+    let created = std::sync::Mutex::new(Some(first));
+    let trace = SharedTrace::new(
+        ctx.open_store()?,
+        &ctx.data_dir()?.join("hooks"),
+        trace_id,
+        Some(loaded.analyzer()),
+        move || {
+            created
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take()
+                .expect("a trace is created at most once per hook call")
+        },
+    )?;
+    let mut output = HookOutput::default();
+    trace
+        .with_recorder(&mut |rec| output = hooks::apply(rec, input, settings))
+        .map_err(|e| anyhow::anyhow!(e))?;
     Ok(output)
-}
-
-/// Exclusive lock for one session, released when the returned file is dropped. Concurrent
-/// hooks of the same session wait for each other, so sequence numbers never collide.
-fn lock_session(ctx: &Context, trace_id: uuid::Uuid) -> anyhow::Result<File> {
-    let dir = ctx.data_dir()?.join("hooks");
-    create_private_dir(&dir)?;
-    let path = dir.join(format!("{trace_id}.lock"));
-    let mut options = OpenOptions::new();
-    options.create(true).truncate(false).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options
-        .open(&path)
-        .with_context(|| format!("cannot open lock file {}", path.display()))?;
-    file.lock()
-        .with_context(|| format!("cannot lock {}", path.display()))?;
-    Ok(file)
 }
 
 /// Print the `hooks` block for Claude Code's settings.json.

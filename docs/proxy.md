@@ -6,13 +6,18 @@ It forwards the traffic, records every tool call as a trace, runs the rules afte
 and can block calls its policy denies.
 
 ```text
-MCP client  ──stdio──▶  agent-trace proxy  ──stdio──▶  MCP server
-(Claude Code, …)        records, checks, blocks        (GitHub, filesystem, …)
-                               │
-                               ▼
-                       trace store (SQLite, PostgreSQL, MySQL)
-                       agent-trace explore --latest --follow
+                ┌─stdio─▶ agent-trace proxy ─stdio─────────▶ MCP server (local command)
+MCP client ─────┤                  │
+(Claude Code, …)└─stdio─▶ agent-trace proxy ─streamable HTTP─▶ MCP server (remote URL)
+                                   │
+                                   ▼
+                     one trace per client session (SQLite, PostgreSQL, MySQL)
+                     agent-trace explore --latest --follow
 ```
+
+The client starts one proxy per server. All proxies of one client session write into **one
+trace**, so untrusted content that arrives through one server counts against privileged calls
+to every other server (see [Sessions](#sessions-one-trace-across-servers)).
 
 ## A real-world example: the GitHub MCP issue injection
 
@@ -171,26 +176,91 @@ call_timeout_secs = 300   # --call-timeout overrides it
 `analyze`, `import`, `export`, `explore` and `demo run` use the same `[policy]`, so a CI gate
 judges a recorded trace the way the proxy did.
 
+## Remote servers (streamable HTTP)
+
+For a server reached by URL, pass `--url` instead of a command. The client still starts the
+proxy over stdio; the proxy connects to the server.
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "agent-trace",
+      "args": ["--config", "/Users/me/.config/agent-trace/github.toml",
+               "proxy", "--name", "github",
+               "--url", "https://api.githubcopilot.com/mcp/",
+               "--bearer-token-env", "GITHUB_PAT"],
+      "env": { "GITHUB_PAT": "…" }
+    }
+  }
+}
+```
+
+- **https only.** Plain `http://` is accepted for `localhost` and loopback addresses only, so
+  tool arguments, results and credentials never cross a network in clear text.
+- **Credentials come from the environment.** `--bearer-token-env VAR` sends
+  `Authorization: Bearer $VAR`; `--header-env NAME=VAR` sends any other header (repeatable).
+  There is no option that takes a secret value on the command line, where other local users
+  could read it in the process list. Tokens and header values are never recorded; the trace
+  stores the URL without credentials, query or fragment.
+- Redirects are followed only within the same origin (307/308), so the session and headers are
+  never replayed to another host.
+- The proxy itself still listens on nothing: clients talk to it over stdio only.
+
+## Sessions: one trace across servers
+
+An MCP client starts one proxy process per configured server. Those proxies find each other
+through a **session key** and write into the same trace:
+
+| Key | When |
+|---|---|
+| `--session KEY` or `$AGENT_TRACE_SESSION` | set explicitly; proxies with the same key share a trace |
+| the MCP client process (PID and start time) | default on Linux and macOS: every proxy the same client process started |
+| none (`--no-session`) | a trace of its own, named `proxy/<name>` (the default on Windows) |
+
+A shared trace is named `proxy-session/<id>`. Each proxy records an `mcp-server-connected`
+event (server, endpoint, mode, taint sources, policy) and its events below it. The trace is
+`running` while any proxy is connected and `completed` when the last one disconnects.
+
+Writers are serialized with a file lock per trace in `<data dir>/proxy-sessions/`, and every
+access loads the trace from the store, so all proxies see each other's events. Taint labels
+name the proxy and the source, e.g. `issues:get_issue`, so a denial says where the content came
+from:
+
+```text
+BLOCKED by agent-trace proxy policy: privileged tool requested after lower-trust content
+entered the session (from issues:get_issue)
+```
+
+If the store fails, a proxy in `enforce` mode answers tool calls with an error instead of
+forwarding them unchecked (it cannot see the session's history); in `observe` mode it forwards
+and logs the error on stderr.
+
 ## Command
 
 ```text
 agent-trace [--config PATH] [--data-dir PATH] [--database-url URL] proxy
             [--name NAME] [--mode observe|enforce] [--call-timeout SECONDS]
-            -- <server command> [args...]
+            [--session KEY | --no-session]
+            ( --url URL [--bearer-token-env VAR] [--header-env NAME=VAR]...
+            | -- <server command> [args...] )
 ```
 
 - Stdout carries only MCP messages. Status lines (trace ID, database, findings at the end) go to
   stderr, which MCP clients show in their server logs.
-- One trace per client session, named `proxy/<name>`, execution mode `live`. It ends when the
-  client disconnects or the proxy gets Ctrl-C or SIGTERM (`ended_by` in the trace metadata).
-- The trace records the client and server names and versions, the mode, the taint sources
-  and the effective policy.
+- Execution mode `live`. A proxy's connection ends when the client disconnects or the proxy
+  gets Ctrl-C or SIGTERM (`ended_by` on its `mcp-server-disconnected` event).
+- The trace records the client name and version; each connection records its server, endpoint,
+  transport, mode, taint sources and effective policy.
 
 ## Limits in this version
 
-- **stdio only.** Servers reached over streamable HTTP cannot be proxied yet.
-- **One server per proxy, one trace per proxy.** Content that enters through server A and
-  leaves through server B is in two traces. Joining them is planned.
+- **Upstream only.** The proxy reaches servers over stdio or streamable HTTP, but it accepts
+  clients over stdio only; it opens no listening port.
+- **Session detection needs a common parent.** Clients that start each server through a
+  separate wrapper process, and all clients on Windows, need `--session KEY` to share a trace.
+- **A crashed proxy keeps the trace `running`**: the connection count is only decremented on a
+  clean exit or a signal.
 - **The client's built-in tools are invisible.** Claude Code's Bash, Write or WebFetch never
   pass through an MCP server. Use the [Claude Code hooks](claude-code-hooks.md) for those.
 - **Forwarded, not recorded:** `resources/list`, `resources/templates/list`, `prompts/list`.

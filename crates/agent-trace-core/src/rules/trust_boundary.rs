@@ -12,6 +12,10 @@ pub const LINK_BASIS_KEY: &str = "link_basis";
 /// which the model may or may not have used.
 pub const LINK_BASIS_SESSION_CONTEXT: &str = "session_context";
 
+/// Metadata key on lower-trust content that adapters link as session context (the MCP
+/// proxy, Claude Code hooks): the value names its source, e.g. `github:get_issue`.
+pub const TAINT_SOURCE_KEY: &str = "taint_source";
+
 /// Confidence and an explanatory sentence for a finding on `request`. Links that only state
 /// "this content was in the same session" are weaker evidence than a recorded cause.
 fn link_strength(request: &Event) -> (Confidence, &'static str) {

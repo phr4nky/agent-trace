@@ -5,6 +5,7 @@ members = [
     "crates/agent-trace-storage",
     "crates/agent-trace-mcp",
     "crates/agent-trace-llm",
+    "crates/agent-trace-net",
     "crates/agent-trace-cli",
 ]
 
@@ -22,6 +23,7 @@ agent-trace-core = { path = "crates/agent-trace-core" }
 agent-trace-storage = { path = "crates/agent-trace-storage" }
 agent-trace-mcp = { path = "crates/agent-trace-mcp" }
 agent-trace-llm = { path = "crates/agent-trace-llm" }
+agent-trace-net = { path = "crates/agent-trace-net" }
 
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }

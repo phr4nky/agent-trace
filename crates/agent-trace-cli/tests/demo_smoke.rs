@@ -322,26 +322,57 @@ fn golden_traces_import_and_analyze() {
     }
 }
 
-/// Static guard: the lab server and demo agent contain no process spawning or networking,
-/// and no HTTP client is reachable from the core, storage or lab (MCP) crates. Only the
-/// opt-in `agent-trace-llm` crate may use one.
+/// Static guard: the lab server and demo agent contain no process spawning or networking;
+/// no source file or manifest of the MCP crate (lab, proxy logic) uses networking; and no HTTP
+/// client is reachable from the core or storage crates. Only the opt-in `agent-trace-llm`
+/// crate and `agent-trace-net` (the proxy's HTTP upstream) may use one.
+///
+/// The MCP crate is checked by its sources and manifest rather than through `Cargo.lock`:
+/// `agent-trace-net` enables rmcp's HTTP client, and Cargo builds one rmcp for the whole
+/// workspace, so the lock file lists reqwest under rmcp for every crate that uses rmcp.
 #[test]
 fn lab_code_has_no_shell_or_network_access() {
+    const NETWORK: &[&str] = &[
+        "TcpStream",
+        "TcpListener",
+        "UdpSocket",
+        "reqwest",
+        "hyper",
+        "std::net",
+        "tokio::net",
+        "StreamableHttp",
+        "streamable_http",
+    ];
     let server =
         std::fs::read_to_string(repo().join("crates/agent-trace-mcp/src/server.rs")).unwrap();
     let lab = std::fs::read_to_string(repo().join("crates/agent-trace-mcp/src/lab.rs")).unwrap();
     for (name, src) in [("server.rs", &server), ("lab.rs", &lab)] {
-        for forbidden in [
-            "std::process",
-            "process::Command",
-            "TcpStream",
-            "UdpSocket",
-            "reqwest",
-            "hyper",
-            "std::net",
-            "tokio::net",
-        ] {
+        for forbidden in ["std::process", "process::Command"].iter().chain(NETWORK) {
             assert!(!src.contains(forbidden), "{name} must not use {forbidden}");
+        }
+    }
+    let mcp_src = repo().join("crates/agent-trace-mcp/src");
+    let mut files = vec![repo().join("crates/agent-trace-mcp/Cargo.toml")];
+    let mut dirs = vec![mcp_src];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    assert!(files.len() > 5, "found the MCP crate's sources");
+    for path in &files {
+        let text = std::fs::read_to_string(path).unwrap();
+        for forbidden in NETWORK {
+            assert!(
+                !text.contains(forbidden),
+                "{} must not use {forbidden}",
+                path.display()
+            );
         }
     }
 
@@ -366,7 +397,7 @@ fn lab_code_has_no_shell_or_network_access() {
         }
         deps.entry(name).or_default().extend(list);
     }
-    for root in ["agent-trace-core", "agent-trace-storage", "agent-trace-mcp"] {
+    for root in ["agent-trace-core", "agent-trace-storage"] {
         let mut seen = std::collections::HashSet::new();
         let mut stack = vec![root.to_owned()];
         while let Some(n) = stack.pop() {
@@ -375,12 +406,18 @@ fn lab_code_has_no_shell_or_network_access() {
             }
             stack.extend(deps.get(&n).cloned().unwrap_or_default());
         }
-        for http in ["reqwest", "hyper", "ureq", "isahc", "surf"] {
+        for http in ["reqwest", "hyper", "ureq", "isahc", "surf", "rmcp"] {
             assert!(!seen.contains(http), "{root} must not depend on {http}");
         }
     }
-    // The opt-in LLM crate is the only place an HTTP client appears.
+    // The opt-in LLM crate has its own HTTP client; the MCP crate gets HTTP connections only
+    // from agent-trace-net and does not depend on it.
     assert!(deps["agent-trace-llm"].iter().any(|d| d == "reqwest"));
+    assert!(
+        !deps["agent-trace-mcp"]
+            .iter()
+            .any(|d| d == "agent-trace-net")
+    );
 }
 
 /// Full demo against PostgreSQL / MySQL / MariaDB when a test URL is configured

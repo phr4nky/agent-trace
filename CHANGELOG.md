@@ -10,12 +10,29 @@ The section of a version is used as the release notes of its GitHub release.
 
 **Upgrade notes:**
 
+- Proxies now write one trace per MCP client session, named `proxy-session/<id>`, instead of one
+  trace per proxy named `proxy/<name>`. Use `--no-session` for the previous behavior. The proxy
+  mode and policy are recorded per connection (`mcp-server-connected` event), no longer in the
+  trace metadata.
+- A proxy in enforce mode now denies tool calls when it cannot read the session from the store.
 - `Bash`, `PowerShell`, `Write`, `Edit`, `MultiEdit` and `NotebookEdit` are now privileged
   tools in the default policy. Imported traces of Claude Code sessions can report AT-002 and
   AT-006 findings where they did not before.
 
 ### Added
 
+- `agent-trace proxy --url URL`: proxy remote MCP servers over streamable HTTP. https only
+  (plain http for loopback), bearer token and headers from environment variables
+  (`--bearer-token-env`, `--header-env NAME=VAR`), same-origin redirects only. New crate
+  `agent-trace-net`.
+- One trace across servers: all proxies an MCP client starts share a trace (key: the client
+  process and its start time on Linux and macOS, or `--session KEY` / `AGENT_TRACE_SESSION`).
+  Untrusted content from one server counts against privileged calls to every other server, and
+  denials name the source, e.g. `issues:get_issue`.
+- Library: `TraceAccess`, `MemoryTrace` and `agent_trace_storage::SharedTrace` for traces written
+  by several processes; `McpSession::from_service`. `Proxy::new` takes an
+  `Arc<dyn TraceAccess>`, `Proxy::finish` and `serve_stdio` no longer return the trace, and
+  `McpSession::record_result` takes extra result metadata.
 - `agent-trace hook`: Claude Code hooks adapter. Registered for SessionStart, UserPromptSubmit,
   PreToolUse, PostToolUse, PostToolUseFailure, SubagentStart, SubagentStop, Stop and SessionEnd,
   it records a whole session as one live trace, built-in tools and MCP tools alike, with
@@ -25,6 +42,9 @@ The section of a version is used as the release notes of its GitHub release.
   `docs/claude-code-hooks.md`.
 - `[hooks]` table in `agent-trace.toml`: mode, taint sources (default WebFetch, WebSearch and
   MCP tools) and `on_error` (fail open by default, or deny tool calls while recording fails).
+- The network guard test checks `agent-trace-mcp` by its sources and manifest instead of
+  `Cargo.lock`, because `agent-trace-net` enables rmcp's HTTP client for the whole workspace.
+  `agent-trace-core` and `agent-trace-storage` must still reach no HTTP client.
 - Library: `TraceRecorder::with_trace_id`, `TraceRecorder::resume`,
   `TraceRecorder::set_status`, `ToolPolicy::evaluate_in_session`, `agent_trace_mcp::apply_mode`.
 

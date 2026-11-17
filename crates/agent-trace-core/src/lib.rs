@@ -17,6 +17,8 @@ pub use event::{
 pub use finding::{AttemptStatus, Confidence, Finding, Severity};
 pub use policy::{Decision, PolicyConfig, PolicyOutcome, ToolPolicy, glob_match};
 pub use provenance::{TraceIndex, ValidationError, validate};
-pub use recorder::{EventSpec, RecorderEvent, TraceRecorder};
+pub use recorder::{
+    AccessError, EventSpec, MemoryTrace, RecorderEvent, TraceAccess, TraceRecorder,
+};
 pub use redact::{RedactionReport, Redactor};
 pub use rules::{Analyzer, Rule};

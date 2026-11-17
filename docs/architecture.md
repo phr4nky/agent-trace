@@ -34,6 +34,7 @@
 | `agent-trace-storage` | SQLite, PostgreSQL and MySQL/MariaDB backends with migrations, `LiveWriter`, JSONL import/export, JSON evidence report | `rmcp`, `ratatui` |
 | `agent-trace-mcp` | `McpSession` adapter (rmcp client over child-process stdio or in-process), `LabServer`, scripted (multi-)agent, shared policy gate, MCP `Proxy` | `ratatui`, any HTTP client |
 | `agent-trace-llm` | Anthropic Messages / OpenAI Chat Completions clients (reqwest + rustls), LLM agent loop with delegation | `ratatui` |
+| `agent-trace-net` | MCP streamable HTTP upstream for the proxy (rmcp's reqwest client + rustls/ring), URL and credential rules | `ratatui`; must not be a dependency of `agent-trace-mcp` |
 | `agent-trace-cli` | `agent-trace` binary, commands, ratatui explorer, redacting log writer | — |
 
 ## Data flow of a lab run
@@ -65,6 +66,23 @@
 
 The recorder lock is held only while recording, never across a call to the upstream server, so
 concurrent tool calls from the client are not serialized. Details: [proxy.md](proxy.md).
+
+## Shared traces (proxy sessions, hooks)
+
+`agent-trace-core` defines `TraceAccess`: run a closure on a trace's recorder under the trace's
+lock and persist what it recorded. `MemoryTrace` keeps a trace in memory (tests, embedders);
+`agent-trace-storage::SharedTrace` keeps it in the store: each access takes a file lock, loads
+the trace, resumes it with `TraceRecorder::resume`, appends the new events, updates the header
+and re-runs the rules. The MCP proxies of one client session and the Claude Code hook processes
+of one session use it, so separate processes write one gap-free trace.
+
+The proxy reads its session state from the trace itself: untrusted content carries
+`taint_source` metadata, the number of connected proxies is a trace metadata counter. Nothing
+the decision needs lives only in one process.
+
+`agent-trace-mcp` contains no networking code (checked by a test over its sources and manifest).
+An HTTP upstream is connected by `agent-trace-net` and handed over as an `McpSession`
+(`McpSession::from_service`).
 
 ## Data flow of a Claude Code session (hooks)
 

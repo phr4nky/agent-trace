@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `agent-trace proxy --url`: remote MCP servers over streamable HTTP (https, tokens from the
+  environment)
+- One trace per client session across all proxied servers: an injection through one server and
+  a privileged call to another are linked and blocked
 - `agent-trace hook`: Claude Code hooks record a whole session (prompts, built-in tools, MCP
   tools, subagents) as one trace and can deny tool calls before they run
 - Claude Code's Bash, PowerShell, Write, Edit, MultiEdit and NotebookEdit are privileged by default
@@ -43,7 +47,6 @@
 
 ## Next
 
-- MCP proxy over streamable HTTP; one trace across several proxied servers of a session
 - OTLP ingestion with a versioned GenAI semantic-convention mapping
 - Interactive causal graph (Angular + Cytoscape.js or equivalent)
 - SARIF export and GitHub Code Scanning integration
