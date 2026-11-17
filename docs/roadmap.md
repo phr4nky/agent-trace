@@ -61,10 +61,6 @@
 - Rules AT-001 … AT-006 (incl. cross-agent taint), golden traces
 - CLI, ratatui explorer, JSONL/JSON import/export, CI + release workflows
 
-## In review
-
-- OTLP ingestion with a versioned GenAI semantic-convention mapping (#16)
-
 ## Next
 
 In order of priority. Each item names the real-world problem it answers and a rough effort.
