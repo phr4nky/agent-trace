@@ -34,6 +34,14 @@ pub trait Rule: Send + Sync {
     fn id(&self) -> &'static str;
     fn version(&self) -> u32;
     fn title(&self) -> &'static str;
+    /// What the rule detects, for reports and SARIF rule metadata.
+    fn description(&self) -> &'static str {
+        ""
+    }
+    /// The severity of the rule's typical finding (a finding may be higher).
+    fn default_severity(&self) -> Severity {
+        Severity::Medium
+    }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding>;
 }
 

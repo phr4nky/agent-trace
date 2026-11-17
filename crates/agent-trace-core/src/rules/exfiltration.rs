@@ -20,6 +20,12 @@ impl Rule for ExfiltrationRule {
     fn title(&self) -> &'static str {
         "Potential exfiltration attempt to non-allowlisted destination"
     }
+    fn description(&self) -> &'static str {
+        "An outbound tool targets a destination that is not on the allowlist while sensitive (redacted) data is among the request's causes: a possible exfiltration."
+    }
+    fn default_severity(&self) -> Severity {
+        Severity::High
+    }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         let mut out = Vec::new();
         let sensitive_causes = ctx.index.sensitive_causes();
@@ -106,6 +112,12 @@ impl Rule for BlockedActionRule {
     }
     fn title(&self) -> &'static str {
         "Risky tool action blocked by policy"
+    }
+    fn description(&self) -> &'static str {
+        "A tool call was denied by policy. Reported as executed when an execution was still recorded after the denial."
+    }
+    fn default_severity(&self) -> Severity {
+        Severity::Medium
     }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         ctx.record

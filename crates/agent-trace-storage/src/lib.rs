@@ -12,6 +12,7 @@ pub mod live;
 pub mod mysql;
 #[cfg(feature = "postgres")]
 pub mod postgres;
+pub mod sarif;
 pub mod shared;
 pub mod sqlite;
 pub mod store;
@@ -25,6 +26,7 @@ pub use backend::{Backend, Dialect, SqlValue};
 pub use config::DatabaseConfig;
 pub use jsonl::{EvidenceReport, Imported, read_jsonl, write_json_report, write_jsonl};
 pub use live::LiveWriter;
+pub use sarif::{SarifTrace, jsonl_event_lines, write_sarif};
 pub use shared::SharedTrace;
 pub use store::{Store, TraceSource, TraceSummary};
 

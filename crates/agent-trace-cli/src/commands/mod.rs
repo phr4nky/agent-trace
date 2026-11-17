@@ -6,6 +6,7 @@ pub mod hook;
 pub mod import;
 pub mod proxy;
 pub mod replay;
+pub mod sarif;
 pub mod trace;
 
 use std::path::{Path, PathBuf};

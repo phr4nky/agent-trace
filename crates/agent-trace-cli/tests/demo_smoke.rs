@@ -830,3 +830,67 @@ fn graph_writes_a_private_self_contained_page() {
     let stdout = ok(&bin(data.path(), &["graph", "--latest"]));
     assert!(stdout.contains("graph-"), "{stdout}");
 }
+
+#[test]
+fn sarif_from_trace_files_points_at_their_lines() {
+    let data = tempfile::tempdir().unwrap();
+    ok(&bin(
+        data.path(),
+        &["demo", "run", "--scenario", "exfil-attempt"],
+    ));
+    let trace = data.path().join("exfil.jsonl");
+    ok(&bin(
+        data.path(),
+        &[
+            "export",
+            "--latest",
+            "--format",
+            "jsonl",
+            "--output",
+            trace.to_str().unwrap(),
+        ],
+    ));
+    let sarif = data.path().join("out.sarif");
+    let out = bin(
+        data.path(),
+        &[
+            "sarif",
+            trace.to_str().unwrap(),
+            "--output",
+            sarif.to_str().unwrap(),
+            "--fail-on",
+            "high",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(2), "high findings fail the gate");
+    let log: Value = serde_json::from_str(&std::fs::read_to_string(&sarif).unwrap()).unwrap();
+    assert_eq!(log["version"], "2.1.0");
+    let results = log["runs"][0]["results"].as_array().unwrap();
+    let at003 = results.iter().find(|r| r["ruleId"] == "AT-003").unwrap();
+    let loc = &at003["locations"][0]["physicalLocation"];
+    let line = loc["region"]["startLine"].as_u64().unwrap() as usize;
+    let text = std::fs::read_to_string(&trace).unwrap();
+    let event: Value = serde_json::from_str(text.lines().nth(line - 1).unwrap()).unwrap();
+    assert_eq!(event["kind"], "tool_call_requested");
+    assert_eq!(event["name"], "send_webhook_mock");
+    assert!(
+        !std::fs::read_to_string(&sarif)
+            .unwrap()
+            .contains("FAKE_SECRET_FOR_TESTING_ONLY")
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&sarif).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+    // A rejected file is an error, not an empty report.
+    let bad = data.path().join("bad.jsonl");
+    std::fs::write(&bad, "not json\n").unwrap();
+    assert_eq!(
+        bin(data.path(), &["sarif", bad.to_str().unwrap()])
+            .status
+            .code(),
+        Some(1)
+    );
+}

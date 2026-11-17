@@ -122,6 +122,23 @@ enum Command {
         /// Output file (default: stdout).
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
+        /// SARIF only: the trace's JSONL file in the repository, which alerts point to
+        /// (default: trace-<id>.jsonl, the layout `--format jsonl` writes).
+        #[arg(long, value_name = "URI")]
+        artifact_uri: Option<String>,
+    },
+    /// Convert JSONL trace files into one SARIF file for GitHub Code Scanning (validated,
+    /// redacted, findings recomputed; nothing is stored).
+    Sarif {
+        /// JSONL trace files, e.g. traces/*.jsonl. Alerts point to lines in these files.
+        #[arg(required = true, value_name = "FILE")]
+        inputs: Vec<PathBuf>,
+        /// Output file (default: stdout).
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+        /// Exit with code 2 if a finding has at least this severity.
+        #[arg(long, value_enum)]
+        fail_on: Option<Threshold>,
     },
     /// Import a trace from JSONL (validated and re-redacted; findings are recomputed).
     Import {
@@ -375,6 +392,8 @@ pub enum Threshold {
 pub enum ExportFormat {
     Json,
     Jsonl,
+    /// SARIF 2.1.0 (GitHub Code Scanning)
+    Sarif,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -525,7 +544,19 @@ fn main() -> ExitCode {
             target,
             format,
             output,
-        } => commands::export::run(&ctx, &target, format, output.as_deref()),
+            artifact_uri,
+        } => commands::export::run(
+            &ctx,
+            &target,
+            format,
+            output.as_deref(),
+            artifact_uri.as_deref(),
+        ),
+        Command::Sarif {
+            inputs,
+            output,
+            fail_on,
+        } => commands::sarif::run(&ctx, &inputs, output.as_deref(), fail_on),
         Command::Import {
             format,
             input,
