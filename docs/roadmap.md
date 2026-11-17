@@ -1,6 +1,6 @@
 # Roadmap
 
-## v1.3.0 (next release)
+## v1.3.0 (this release)
 
 - `agent-trace proxy`: record and optionally enforce the traffic between any MCP client and an
   MCP server over stdio

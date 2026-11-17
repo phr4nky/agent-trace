@@ -8,6 +8,11 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-17
+
+Record and protect the agents you already use: an MCP proxy for Claude Code, Cursor, Claude
+Desktop and any other MCP client, and a configuration file for the policy.
+
 **Upgrade notes:**
 
 - AT-002 moves to rule version 4 and AT-006 to version 3, so their finding IDs change.
@@ -167,7 +172,8 @@ First release.
 - CLI commands `demo`, `trace`, `analyze --fail-on`, `explore`, `export` and `import`.
 - CI examples for GitHub Actions, GitLab CI and Jenkins.
 
-[Unreleased]: https://github.com/phr4nky/agent-trace/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/phr4nky/agent-trace/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/phr4nky/agent-trace/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/phr4nky/agent-trace/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/phr4nky/agent-trace/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/phr4nky/agent-trace/releases/tag/v1.0.0
