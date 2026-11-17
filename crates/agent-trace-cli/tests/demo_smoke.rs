@@ -801,3 +801,32 @@ mod hunt_regressions {
         assert!(!list.contains("running"), "{list}");
     }
 }
+
+#[test]
+fn graph_writes_a_private_self_contained_page() {
+    let data = tempfile::tempdir().unwrap();
+    ok(&bin(
+        data.path(),
+        &["demo", "run", "--scenario", "multi-agent-handoff"],
+    ));
+    let out = data.path().join("graph.html");
+    let stdout = ok(&bin(
+        data.path(),
+        &["graph", "--latest", "--output", out.to_str().unwrap()],
+    ));
+    assert!(stdout.contains("no network requests"), "{stdout}");
+    let html = std::fs::read_to_string(&out).unwrap();
+    assert!(html.starts_with("<!doctype html>"));
+    assert!(html.contains("http-equiv=\"Content-Security-Policy\""));
+    assert!(html.contains("AT-006"), "findings are embedded");
+    assert!(html.contains("\"redacted\":true"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&out).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+    // Default location: the exports directory.
+    let stdout = ok(&bin(data.path(), &["graph", "--latest"]));
+    assert!(stdout.contains("graph-"), "{stdout}");
+}

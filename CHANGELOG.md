@@ -21,6 +21,13 @@ The section of a version is used as the release notes of its GitHub release.
 
 ### Added
 
+- `agent-trace graph <trace-id>|--latest [--output PATH]`: the causal graph of a trace as one
+  self-contained HTML file. Lanes per agent and per MCP server, cause / context / structure
+  edges, a finding's evidence path, an event's ancestors and descendants, payload and links of
+  an event, pan, zoom and search. The page contains the redacted evidence report, makes no
+  network requests (no CDN, no server), and its Content-Security-Policy allows only its own
+  script and style by hash; trace content is inserted as text only.
+
 - `agent-trace proxy --url URL`: proxy remote MCP servers over streamable HTTP. https only
   (plain http for loopback), bearer token and headers from environment variables
   (`--bearer-token-env`, `--header-env NAME=VAR`), same-origin redirects only. New crate

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `agent-trace graph`: interactive causal graph as one self-contained, offline HTML file (lanes
+  per agent and MCP server, evidence paths of findings, ancestors and descendants of an event)
 - `agent-trace proxy --url`: remote MCP servers over streamable HTTP (https, tokens from the
   environment)
 - One trace per client session across all proxied servers: an injection through one server and
@@ -48,7 +50,6 @@
 ## Next
 
 - OTLP ingestion with a versioned GenAI semantic-convention mapping
-- Interactive causal graph (Angular + Cytoscape.js or equivalent)
 - SARIF export and GitHub Code Scanning integration
 - Tamper evidence (hash-chained events, signed exports)
 - Retention and redaction configuration, rule/plugin SDK

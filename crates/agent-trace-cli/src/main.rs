@@ -98,6 +98,15 @@ enum Command {
         #[arg(long, conflicts_with = "snapshot")]
         follow: bool,
     },
+    /// Write an interactive causal graph of a trace as a self-contained HTML file
+    /// (redacted, no network requests). Open it in a browser.
+    Graph {
+        #[command(flatten)]
+        target: TraceTarget,
+        /// Output file (default: graph-<trace id>.html in the exports directory).
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
     /// Export a trace and its findings (always redacted).
     Export {
         #[command(flatten)]
@@ -308,58 +317,58 @@ fn main() -> ExitCode {
         config: cli.config.clone(),
         style: output::Style::new(color),
     };
-    let result =
-        match cli.command {
-            Command::LabServer { documents } => commands::lab_server(&documents).map(|_| EXIT_OK),
-            Command::Hook {
-                mode,
+    let result = match cli.command {
+        Command::LabServer { documents } => commands::lab_server(&documents).map(|_| EXIT_OK),
+        Command::Hook {
+            mode,
+            print_settings,
+        } => commands::hook::run(
+            &ctx,
+            commands::hook::HookArgs {
+                mode: mode.map(ProxyModeArg::into_mode),
                 print_settings,
-            } => commands::hook::run(
-                &ctx,
-                commands::hook::HookArgs {
-                    mode: mode.map(ProxyModeArg::into_mode),
-                    print_settings,
-                },
-            ),
-            Command::Proxy {
+            },
+        ),
+        Command::Proxy {
+            name,
+            mode,
+            call_timeout,
+            url,
+            bearer_token_env,
+            header_env,
+            session,
+            no_session,
+            command,
+        } => commands::proxy::run(
+            &ctx,
+            commands::proxy::ProxyArgs {
                 name,
-                mode,
-                call_timeout,
+                mode: mode.map(ProxyModeArg::into_mode),
+                call_timeout_secs: call_timeout,
+                command,
                 url,
                 bearer_token_env,
                 header_env,
                 session,
                 no_session,
-                command,
-            } => commands::proxy::run(
-                &ctx,
-                commands::proxy::ProxyArgs {
-                    name,
-                    mode: mode.map(ProxyModeArg::into_mode),
-                    call_timeout_secs: call_timeout,
-                    command,
-                    url,
-                    bearer_token_env,
-                    header_env,
-                    session,
-                    no_session,
+            },
+        ),
+        Command::Demo {
+            command:
+                DemoCommand::Run {
+                    scenario,
+                    lab_dir,
+                    deterministic,
+                    provider,
+                    model,
+                    base_url,
+                    max_turns,
+                    live,
+                    step_delay_ms,
+                    fail_on,
                 },
-            ),
-            Command::Demo {
-                command:
-                    DemoCommand::Run {
-                        scenario,
-                        lab_dir,
-                        deterministic,
-                        provider,
-                        model,
-                        base_url,
-                        max_turns,
-                        live,
-                        step_delay_ms,
-                        fail_on,
-                    },
-            } => commands::demo::run(
+        } => {
+            commands::demo::run(
                 &ctx,
                 commands::demo::DemoArgs {
                     scenario,
@@ -374,37 +383,39 @@ fn main() -> ExitCode {
                     ),
                     fail_on,
                 },
-            ),
-            Command::Trace {
-                command: TraceCommand::List,
-            } => commands::trace::list(&ctx),
-            Command::Trace {
-                command: TraceCommand::Show { target, payload },
-            } => commands::trace::show(&ctx, &target, payload),
-            Command::Analyze { target, fail_on } => commands::analyze::run(&ctx, &target, fail_on),
-            Command::Explore {
-                target,
-                snapshot,
-                keys,
-                size,
-                follow,
-            } => commands::explore(
-                &ctx,
-                &target,
-                snapshot.then_some((keys.as_str(), size.as_str())),
-                follow,
-            ),
-            Command::Export {
-                target,
-                format,
-                output,
-            } => commands::export::run(&ctx, &target, format, output.as_deref()),
-            Command::Import {
-                format,
-                input,
-                fail_on,
-            } => commands::import::run(&ctx, format, &input, fail_on),
-        };
+            )
+        }
+        Command::Trace {
+            command: TraceCommand::List,
+        } => commands::trace::list(&ctx),
+        Command::Trace {
+            command: TraceCommand::Show { target, payload },
+        } => commands::trace::show(&ctx, &target, payload),
+        Command::Analyze { target, fail_on } => commands::analyze::run(&ctx, &target, fail_on),
+        Command::Explore {
+            target,
+            snapshot,
+            keys,
+            size,
+            follow,
+        } => commands::explore(
+            &ctx,
+            &target,
+            snapshot.then_some((keys.as_str(), size.as_str())),
+            follow,
+        ),
+        Command::Graph { target, output } => commands::graph::run(&ctx, &target, output.as_deref()),
+        Command::Export {
+            target,
+            format,
+            output,
+        } => commands::export::run(&ctx, &target, format, output.as_deref()),
+        Command::Import {
+            format,
+            input,
+            fail_on,
+        } => commands::import::run(&ctx, format, &input, fail_on),
+    };
     match result {
         Ok(code) => ExitCode::from(code),
         Err(err) => {

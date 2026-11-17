@@ -67,6 +67,16 @@
 The recorder lock is held only while recording, never across a call to the upstream server, so
 concurrent tool calls from the client are not serialized. Details: [proxy.md](proxy.md).
 
+## Causal graph (`agent-trace graph`)
+
+`commands/graph.rs` fills `graph/template.html` with the redacted evidence report (the
+`export --format json` content, escaped for a `<script>` data block), `graph/graph.css` and
+`graph/graph.js`, and writes one HTML file. The viewer is plain JavaScript and SVG, no libraries:
+events are placed left to right by sequence, in one lane per agent and one per MCP server (for
+what the server returned); links are the recorded `caused_by_event_id`, `context_event_ids` and
+`parent_event_id`. Highlighting walks the same links the rules follow. The CSP hashes of the
+inline script and style are computed when the page is written.
+
 ## Shared traces (proxy sessions, hooks)
 
 `agent-trace-core` defines `TraceAccess`: run a closure on a trace's recorder under the trace's
