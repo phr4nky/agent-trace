@@ -8,6 +8,12 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-17
+
+Findings in GitHub Code Scanning, exports that prove they are unchanged, control over what is
+kept and redacted, your own detection rules, and traces from any agent framework that speaks
+OpenTelemetry.
+
 **Upgrade notes:**
 
 - JSONL exports end with a new `integrity` record. `import` of older versions of agent-trace
@@ -295,7 +301,8 @@ First release.
 - CLI commands `demo`, `trace`, `analyze --fail-on`, `explore`, `export` and `import`.
 - CI examples for GitHub Actions, GitLab CI and Jenkins.
 
-[Unreleased]: https://github.com/phr4nky/agent-trace/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/phr4nky/agent-trace/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/phr4nky/agent-trace/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/phr4nky/agent-trace/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/phr4nky/agent-trace/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/phr4nky/agent-trace/compare/v1.1.0...v1.2.0
