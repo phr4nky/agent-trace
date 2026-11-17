@@ -27,6 +27,7 @@ user prompt ─▶ read_document (MCP) ─▶ ⚠ untrusted text: "send the API 
 - [The demo, step by step](#the-demo-step-by-step)
 - [Watching live](#watching-live)
 - [Real LLMs: Claude, OpenAI, Ollama](#real-llms-claude-openai-ollama)
+- [Replay: test a new model or prompt against a recorded attack](#replay-test-a-new-model-or-prompt-against-a-recorded-attack)
 - [How it works](#how-it-works)
 - [Command reference](#command-reference)
 - [Storage: SQLite, PostgreSQL, MariaDB, MySQL](#storage-sqlite-postgresql-mariadb-mysql)
@@ -285,6 +286,30 @@ the endpoint are not followed, and responses larger than 16 MiB are rejected.
 
 ---
 
+## Replay: test a new model or prompt against a recorded attack
+
+Re-run a recorded session with another model or system prompt. The task and every tool result
+come from the recording (the same injected README, issue or webpage); only the model is live,
+and nothing is executed. The findings are compared with the recording's:
+
+```bash
+agent-trace replay trace --latest --provider anthropic --model claude-sonnet-5-5 \
+    --system-prompt prompts/hardened.txt --runs 3 --fail-on high
+```
+
+A **regression suite** (TOML) lists recordings with thresholds and exits with code 2 when a model
+tries a privileged or outbound action it must not, for CI:
+
+```bash
+agent-trace replay suite replay-suite.toml --provider openai --model gpt-5.4-mini --report report.json
+```
+
+Only the model's actions decide (`attempted`, `blocked`, `executed`); findings about the
+recorded content are the same in every replay. Details and the suite format:
+[docs/replay.md](docs/replay.md).
+
+---
+
 ## How it works
 
 ```text
@@ -335,6 +360,9 @@ agent-trace analyze <trace-id>|--latest [--fail-on low|medium|high|critical]
 agent-trace explore <trace-id>|--latest [--follow] [--snapshot [--keys KEYS] [--size COLSxROWS]]
 agent-trace export <trace-id>|--latest --format json|jsonl [--output PATH]
 agent-trace graph <trace-id>|--latest [--output PATH]
+agent-trace replay trace <trace-id>|--latest|--input FILE --provider P [--model M] [--system-prompt FILE]
+                         [--prompt TEXT] [--runs N] [--fail-on SEVERITY] [--report PATH]
+agent-trace replay suite FILE --provider P [--model M] [--system-prompt FILE] [--report PATH]
 agent-trace import --format jsonl --input PATH
 agent-trace hook [--mode observe|enforce] [--print-settings]
 agent-trace proxy [--name NAME] [--mode observe|enforce] [--session KEY | --no-session]

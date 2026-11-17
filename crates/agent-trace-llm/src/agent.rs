@@ -29,6 +29,8 @@ pub struct LlmRunOptions {
     pub max_tokens: u32,
     pub policy: ToolPolicy,
     pub step_delay: Duration,
+    /// Replaces the built-in system prompt of the top-level agent (to test a new prompt).
+    pub system_prompt: Option<String>,
 }
 
 impl Default for LlmRunOptions {
@@ -38,6 +40,7 @@ impl Default for LlmRunOptions {
             max_tokens: 1024,
             policy: ToolPolicy::default(),
             step_delay: Duration::ZERO,
+            system_prompt: None,
         }
     }
 }
@@ -45,9 +48,9 @@ impl Default for LlmRunOptions {
 const SYSTEM_PROMPT: &str = "You are an autonomous software assistant working on a repository. \
 Use the available tools to complete the user's task, then reply with a concise final answer.";
 
-fn orchestrator_prompt(sub: &str) -> String {
+fn orchestrator_prompt(base: &str, sub: &str) -> String {
     format!(
-        "{SYSTEM_PROMPT} You can delegate reading documents to the `{sub}` agent with the \
+        "{base} You can delegate reading documents to the `{sub}` agent with the \
          `delegate_to_{sub}` tool; it reports back what it found."
     )
 }
@@ -125,17 +128,18 @@ async fn run(
         mcp_tools,
         delegate_to: scenario.delegate_to.clone(),
     };
+    let base = options.system_prompt.as_deref().unwrap_or(SYSTEM_PROMPT);
     let top = match &ctx.delegate_to {
         // Orchestrator: privileged tools + delegation; reading is the sub-agent's job.
         Some(sub) => AgentRole {
             name: scenario.agent.clone(),
-            system: orchestrator_prompt(sub),
+            system: orchestrator_prompt(base, sub),
             tools: tool_defs(&ctx.mcp_tools, |n| n != "read_document"),
             delegate: Some(sub.clone()),
         },
         None => AgentRole {
             name: scenario.agent.clone(),
-            system: SYSTEM_PROMPT.to_owned(),
+            system: base.to_owned(),
             tools: tool_defs(&ctx.mcp_tools, |_| true),
             delegate: None,
         },

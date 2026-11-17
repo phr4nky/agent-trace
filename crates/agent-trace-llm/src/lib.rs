@@ -4,6 +4,7 @@
 //! * [`openai`]: OpenAI Chat Completions, also used by OpenAI-compatible servers
 //!   (Ollama, vLLM, LM Studio, …)
 //! * [`agent`]: an LLM-driven agent loop over the lab's MCP tools (policy-gated mocks)
+//! * [`replay`]: run a model against a recorded session and compare the findings
 //!
 //! Opt-in only: nothing here runs unless a provider is selected explicitly.
 
@@ -11,12 +12,14 @@ pub mod agent;
 pub mod anthropic;
 pub mod client;
 pub mod openai;
+pub mod replay;
 pub mod types;
 
 use thiserror::Error;
 
 pub use agent::{LlmRunOptions, run_llm_scenario};
 pub use client::{LlmClient, ProviderConfig, ProviderKind};
+pub use replay::{ReplayOptions, RuleComparison, compare, replay_trace, verdict};
 
 #[derive(Debug, Error)]
 pub enum LlmError {

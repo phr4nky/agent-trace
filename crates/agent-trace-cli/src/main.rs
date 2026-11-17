@@ -98,6 +98,12 @@ enum Command {
         #[arg(long, conflicts_with = "snapshot")]
         follow: bool,
     },
+    /// Replay recorded sessions with a model (or system prompt) and compare the findings:
+    /// prompts and tool results come from the recording, nothing is executed.
+    Replay {
+        #[command(subcommand)]
+        command: ReplayCommand,
+    },
     /// Write an interactive causal graph of a trace as a self-contained HTML file
     /// (redacted, no network requests). Open it in a browser.
     Graph {
@@ -224,6 +230,83 @@ enum DemoCommand {
         #[arg(long, value_enum)]
         fail_on: Option<Threshold>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ReplayCommand {
+    /// Replay one recording.
+    Trace {
+        #[command(flatten)]
+        source: ReplaySource,
+        #[command(flatten)]
+        model: ModelFlags,
+        /// The task, if the recording has none (MCP proxy traces) or it should change.
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Number of replays (models are not deterministic).
+        #[arg(long, default_value_t = 1)]
+        runs: usize,
+        /// Exit with code 2 if a replay has a model action at or above this severity.
+        #[arg(long, value_enum)]
+        fail_on: Option<Threshold>,
+        /// Also write a JSON report to this file.
+        #[arg(long, value_name = "PATH")]
+        report: Option<PathBuf>,
+    },
+    /// Run a regression suite (TOML) of recordings; exits with code 2 if a case fails.
+    Suite {
+        /// The suite file.
+        file: PathBuf,
+        #[command(flatten)]
+        model: ModelFlags,
+        /// Also write a JSON report to this file.
+        #[arg(long, value_name = "PATH")]
+        report: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Args)]
+#[group(required = true, multiple = false)]
+pub struct ReplaySource {
+    /// Stored trace id or unique prefix.
+    trace_id: Option<String>,
+    /// The most recently stored trace.
+    #[arg(long)]
+    latest: bool,
+    /// A JSONL trace file (as written by `export --format jsonl`).
+    #[arg(long, value_name = "PATH")]
+    input: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct ModelFlags {
+    /// Model provider. Keys come from the environment: ANTHROPIC_API_KEY / OPENAI_API_KEY.
+    #[arg(long, value_enum)]
+    provider: ProviderArg,
+    /// Model name (or ANTHROPIC_MODEL / OPENAI_MODEL).
+    #[arg(long)]
+    model: Option<String>,
+    /// API base URL (or ANTHROPIC_BASE_URL / OPENAI_BASE_URL).
+    #[arg(long, value_name = "URL")]
+    base_url: Option<String>,
+    /// Maximum model turns per agent.
+    #[arg(long, default_value_t = 8)]
+    max_turns: usize,
+    /// Use this system prompt instead of the built-in one (to test a prompt change).
+    #[arg(long, value_name = "PATH")]
+    system_prompt: Option<PathBuf>,
+}
+
+impl ModelFlags {
+    fn into_args(self) -> commands::replay::ModelArgs {
+        commands::replay::ModelArgs {
+            provider: self.provider,
+            model: self.model,
+            base_url: self.base_url,
+            max_turns: self.max_turns,
+            system_prompt: self.system_prompt,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -404,6 +487,39 @@ fn main() -> ExitCode {
             snapshot.then_some((keys.as_str(), size.as_str())),
             follow,
         ),
+        Command::Replay {
+            command:
+                ReplayCommand::Trace {
+                    source,
+                    model,
+                    prompt,
+                    runs,
+                    fail_on,
+                    report,
+                },
+        } => commands::replay::trace(
+            &ctx,
+            model.into_args(),
+            commands::replay::TraceArgs {
+                target: source.input.is_none().then_some(TraceTarget {
+                    trace_id: source.trace_id,
+                    latest: source.latest,
+                }),
+                input: source.input,
+                prompt,
+                runs,
+                fail_on,
+                report,
+            },
+        ),
+        Command::Replay {
+            command:
+                ReplayCommand::Suite {
+                    file,
+                    model,
+                    report,
+                },
+        } => commands::replay::suite(&ctx, model.into_args(), &file, report.as_deref()),
         Command::Graph { target, output } => commands::graph::run(&ctx, &target, output.as_deref()),
         Command::Export {
             target,

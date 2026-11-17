@@ -8,6 +8,7 @@
 pub mod adapter;
 pub mod lab;
 pub mod proxy;
+pub mod replay;
 pub mod server;
 
 pub use adapter::{CallOutcome, CallSpec, McpSession, ServerCommand, ToolSpec};
@@ -17,4 +18,5 @@ pub use lab::{
     record_session_metadata, run_scenario, run_scenario_with,
 };
 pub use proxy::{Proxy, ProxyConfig, ProxyMode, apply_mode};
+pub use replay::{RecordedCall, ReplayFixture, ReplayServer};
 pub use server::{LabServer, resolve_fixture_path, serve_stdio};

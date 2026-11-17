@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `agent-trace replay`: run a model or system prompt against a recorded session (task and tool
+  results from the recording, nothing executed) and compare the findings; regression suites in
+  TOML with exit code 2 for CI
 - `agent-trace graph`: interactive causal graph as one self-contained, offline HTML file (lanes
   per agent and MCP server, evidence paths of findings, ancestors and descendants of an event)
 - `agent-trace proxy --url`: remote MCP servers over streamable HTTP (https, tokens from the
@@ -53,4 +56,3 @@
 - SARIF export and GitHub Code Scanning integration
 - Tamper evidence (hash-chained events, signed exports)
 - Retention and redaction configuration, rule/plugin SDK
-- Controlled replay and model regression suites
