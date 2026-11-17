@@ -450,6 +450,9 @@ pub enum ExportFormat {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ImportFormat {
     Jsonl,
+    /// OpenTelemetry traces as OTLP/JSON (GenAI semantic conventions), one request per file
+    /// or per line (the Collector's file exporter). Each OTel trace becomes a trace.
+    Otlp,
 }
 
 fn main() -> ExitCode {
