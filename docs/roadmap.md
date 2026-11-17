@@ -1,6 +1,6 @@
 # Roadmap
 
-## Unreleased
+## v1.4.0 (this release)
 
 - `agent-trace replay`: run a model or system prompt against a recorded session (task and tool
   results from the recording, nothing executed) and compare the findings; regression suites in

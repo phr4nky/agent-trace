@@ -8,6 +8,11 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-17
+
+Record whole Claude Code sessions, follow an attack across several MCP servers, look at it as a
+graph, and check whether a new model or prompt would still fall for it.
+
 **Upgrade notes:**
 
 - Proxies now write one trace per MCP client session, named `proxy-session/<id>`, instead of one
@@ -21,50 +26,55 @@ The section of a version is used as the release notes of its GitHub release.
 
 ### Added
 
-- `agent-trace replay trace <trace>|--latest|--input FILE` and `agent-trace replay suite FILE`:
-  controlled replay and model regression suites. The recorded task and tool results are served
-  by an in-process MCP server (`agent_trace_mcp::ReplayServer`); only the model, or its system
-  prompt (`--system-prompt`), is live, and nothing is executed. Replays are stored as traces
-  (`replay/<name>`, `replay_of`), compared with the recording rule by rule, and fail when a model
-  action (`attempted`, `blocked`, `executed`) reaches the threshold. Suites (TOML) set
-  recordings, prompts, thresholds and repeat counts per case; `--report` writes JSON. See
-  `docs/replay.md`.
-- Library: `LlmRunOptions::system_prompt`, `agent_trace_llm::{replay_trace, compare, verdict}`,
-  `agent_trace_mcp::{ReplayFixture, ReplayServer}`.
-
-- `agent-trace graph <trace-id>|--latest [--output PATH]`: the causal graph of a trace as one
+- **Claude Code hooks** (`agent-trace hook`): registered for SessionStart, UserPromptSubmit,
+  PreToolUse, PostToolUse, PostToolUseFailure, SubagentStart, SubagentStop, Stop and SessionEnd,
+  it records a whole session as one live trace, built-in tools and MCP tools alike, with
+  subagents as separate agents. In enforce mode it denies a privileged tool call after untrusted
+  content reached the acting agent, also through a subagent's report (AT-006).
+  `agent-trace hook --print-settings` prints the block for Claude Code's settings. A `[hooks]`
+  table in `agent-trace.toml` sets the mode, the taint sources (default WebFetch, WebSearch and
+  MCP tools) and `on_error` (fail open by default, or deny tool calls while recording fails).
+  See `docs/claude-code-hooks.md`.
+- **Remote MCP servers** (`agent-trace proxy --url URL`): proxy servers over streamable HTTP.
+  https only (plain http for loopback), bearer token and headers from environment variables
+  (`--bearer-token-env`, `--header-env NAME=VAR`), same-origin redirects only. New crate
+  `agent-trace-net`.
+- **One trace across MCP servers:** all proxies an MCP client starts share a trace (key: the
+  client process and its start time on Linux and macOS, or `--session KEY` /
+  `AGENT_TRACE_SESSION`). Untrusted content from one server counts against privileged calls to
+  every other server, and denials name the source, e.g. `issues:get_issue`.
+- **Causal graph** (`agent-trace graph <trace-id>|--latest [--output PATH]`): the trace as one
   self-contained HTML file. Lanes per agent and per MCP server, cause / context / structure
   edges, a finding's evidence path, an event's ancestors and descendants, payload and links of
   an event, pan, zoom and search. The page contains the redacted evidence report, makes no
   network requests (no CDN, no server), and its Content-Security-Policy allows only its own
   script and style by hash; trace content is inserted as text only.
+- **Replay and model regression suites** (`agent-trace replay trace <trace>|--latest|--input
+  FILE`, `agent-trace replay suite FILE`): run a model, or a new system prompt
+  (`--system-prompt`), against a recorded session. The recorded task and tool results are
+  served by an in-process MCP server; only the model is live, and nothing is executed. Replays
+  are stored as traces (`replay/<name>`, `replay_of`), compared with the recording rule by rule,
+  and fail when a model action (`attempted`, `blocked`, `executed`) reaches the threshold. Suites
+  (TOML) set recordings, prompts, thresholds and repeat counts per case; `--report` writes JSON;
+  exit code 2 for CI. See `docs/replay.md`.
 
-- `agent-trace proxy --url URL`: proxy remote MCP servers over streamable HTTP. https only
-  (plain http for loopback), bearer token and headers from environment variables
-  (`--bearer-token-env`, `--header-env NAME=VAR`), same-origin redirects only. New crate
-  `agent-trace-net`.
-- One trace across servers: all proxies an MCP client starts share a trace (key: the client
-  process and its start time on Linux and macOS, or `--session KEY` / `AGENT_TRACE_SESSION`).
-  Untrusted content from one server counts against privileged calls to every other server, and
-  denials name the source, e.g. `issues:get_issue`.
-- Library: `TraceAccess`, `MemoryTrace` and `agent_trace_storage::SharedTrace` for traces written
-  by several processes; `McpSession::from_service`. `Proxy::new` takes an
-  `Arc<dyn TraceAccess>`, `Proxy::finish` and `serve_stdio` no longer return the trace, and
-  `McpSession::record_result` takes extra result metadata.
-- `agent-trace hook`: Claude Code hooks adapter. Registered for SessionStart, UserPromptSubmit,
-  PreToolUse, PostToolUse, PostToolUseFailure, SubagentStart, SubagentStop, Stop and SessionEnd,
-  it records a whole session as one live trace, built-in tools and MCP tools alike, with
-  subagents as separate agents. In enforce mode it denies a privileged tool call after untrusted
-  content reached the acting agent, also through a subagent's report (AT-006).
-  `agent-trace hook --print-settings` prints the block for Claude Code's settings. See
-  `docs/claude-code-hooks.md`.
-- `[hooks]` table in `agent-trace.toml`: mode, taint sources (default WebFetch, WebSearch and
-  MCP tools) and `on_error` (fail open by default, or deny tool calls while recording fails).
+### Changed
+
 - The network guard test checks `agent-trace-mcp` by its sources and manifest instead of
   `Cargo.lock`, because `agent-trace-net` enables rmcp's HTTP client for the whole workspace.
   `agent-trace-core` and `agent-trace-storage` must still reach no HTTP client.
-- Library: `TraceRecorder::with_trace_id`, `TraceRecorder::resume`,
-  `TraceRecorder::set_status`, `ToolPolicy::evaluate_in_session`, `agent_trace_mcp::apply_mode`.
+
+### Library
+
+- Shared traces written by several processes: `TraceAccess`, `MemoryTrace`,
+  `agent_trace_storage::SharedTrace`; `TraceRecorder::with_trace_id`, `TraceRecorder::resume`,
+  `TraceRecorder::set_status`.
+- `ToolPolicy::evaluate_in_session` and `agent_trace_mcp::apply_mode` (the decision shared by
+  the proxy and the hooks); `McpSession::from_service`.
+- `Proxy::new` takes an `Arc<dyn TraceAccess>`; `Proxy::finish` and `serve_stdio` no longer
+  return the trace; `McpSession::record_result` takes extra result metadata.
+- Replay: `LlmRunOptions::system_prompt`, `agent_trace_llm::{replay_trace, compare, verdict}`,
+  `agent_trace_mcp::{ReplayFixture, ReplayServer}`.
 
 ## [1.3.0] - 2026-11-17
 
@@ -230,7 +240,8 @@ First release.
 - CLI commands `demo`, `trace`, `analyze --fail-on`, `explore`, `export` and `import`.
 - CI examples for GitHub Actions, GitLab CI and Jenkins.
 
-[Unreleased]: https://github.com/phr4nky/agent-trace/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/phr4nky/agent-trace/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/phr4nky/agent-trace/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/phr4nky/agent-trace/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/phr4nky/agent-trace/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/phr4nky/agent-trace/compare/v1.0.0...v1.1.0
