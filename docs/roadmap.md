@@ -61,7 +61,40 @@
 - Rules AT-001 … AT-006 (incl. cross-agent taint), golden traces
 - CLI, ratatui explorer, JSONL/JSON import/export, CI + release workflows
 
+## In review
+
+- SARIF export and GitHub Code Scanning integration (#13)
+- Tamper evidence: hash-chained and signed exports (#14)
+- Retention and redaction configuration, declarative rules (#15)
+- OTLP ingestion with a versioned GenAI semantic-convention mapping (#16)
+
 ## Next
 
-- A local OTLP/HTTP receiver (today: the Collector's file exporter)
-- Mappings for OpenInference and OpenLLMetry span attributes
+In order of priority:
+
+1. **Canary tokens: from indicator to proof.** Plant decoy secrets (a fake cloud key in `.env`,
+   a token in a document) and report it as critical when one of them shows up in the arguments
+   of an outbound tool call. Today's findings are indicators; a leaked canary is evidence.
+2. **Rug-pull protection for MCP servers.** Pin the tool descriptions a server announces the first
+   time (hash of `tools/list`) and alert or block in the proxy when they change later. Changed or
+   poisoned tool descriptions are a known way to slip instructions into an approved server.
+3. **Approval mode.** Besides allow and deny, ask a human before a privileged call that follows
+   untrusted content (Claude Code: `permissionDecision: "ask"`; proxy: MCP elicitation), and
+   task-scoped permissions: a read-only task gets no write tools.
+4. **Attack library.** Recordings of publicly documented agent attacks (prompt injection through
+   issues, tickets, web pages and tool descriptions) shipped as a replay suite, so a model or
+   prompt change can be checked against known attacks before it ships.
+5. **Taxonomy tags.** Map rules and findings to the OWASP Top 10 for LLM Applications and to
+   MITRE ATLAS, in reports, SARIF and the explorer.
+6. **Compliance evidence.** An evidence report built from signed traces for record-keeping
+   requirements such as Article 12 of the EU AI Act: what was recorded, how long it is kept, and
+   proof that it is unchanged.
+7. **SIEM export.** Findings and events as OCSF, plus ready-made outputs for Splunk and Elastic,
+   so security operations teams see agent incidents in the tools they already use.
+
+## Later
+
+- A local OTLP/HTTP receiver, and mappings for OpenInference and OpenLLMetry attributes
+- Baselines of normal agent behavior (statistical, no model judges)
+- Agent-to-agent protocols (A2A) across organizations
+- Computer-use and browser agents: screen and page content as untrusted input
