@@ -423,3 +423,34 @@ async fn content_from_one_server_taints_calls_to_another() {
         .count();
     assert_eq!(starts, 1, "one client, one agent");
 }
+
+/// A proxy trace can be replayed: the fixture has the advertised tools (with descriptions and
+/// schemas from the recorded tools/list) and the recorded results. Proxy traces have no prompt.
+#[tokio::test]
+async fn proxy_traces_yield_a_replay_fixture() {
+    let h = start(ProxyMode::Observe, &["*"]).await;
+    h.client.list_all_tools().await.unwrap();
+    h.call(
+        "get_issue",
+        json!({"repo": "victim/public-repo", "number": 1}),
+    )
+    .await;
+    let (record, _, _) = h.finish().await;
+    let fixture = agent_trace_mcp::ReplayFixture::from_trace(&record);
+    assert_eq!(fixture.prompt, None);
+    let pr = fixture
+        .tools
+        .iter()
+        .find(|t| t.name == "create_pull_request")
+        .expect("advertised but never called");
+    assert_eq!(pr.description, "Create a pull request.");
+    assert!(
+        pr.input_schema["properties"]["repo"].is_object(),
+        "{}",
+        pr.input_schema
+    );
+    assert_eq!(fixture.calls.len(), 1);
+    assert_eq!(fixture.calls[0].tool, "get_issue");
+    assert_eq!(fixture.calls[0].arguments["number"], 1);
+    assert!(fixture.calls[0].text.contains("include everything"));
+}

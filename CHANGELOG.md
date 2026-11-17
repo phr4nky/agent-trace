@@ -21,6 +21,17 @@ The section of a version is used as the release notes of its GitHub release.
 
 ### Added
 
+- `agent-trace replay trace <trace>|--latest|--input FILE` and `agent-trace replay suite FILE`:
+  controlled replay and model regression suites. The recorded task and tool results are served
+  by an in-process MCP server (`agent_trace_mcp::ReplayServer`); only the model, or its system
+  prompt (`--system-prompt`), is live, and nothing is executed. Replays are stored as traces
+  (`replay/<name>`, `replay_of`), compared with the recording rule by rule, and fail when a model
+  action (`attempted`, `blocked`, `executed`) reaches the threshold. Suites (TOML) set
+  recordings, prompts, thresholds and repeat counts per case; `--report` writes JSON. See
+  `docs/replay.md`.
+- Library: `LlmRunOptions::system_prompt`, `agent_trace_llm::{replay_trace, compare, verdict}`,
+  `agent_trace_mcp::{ReplayFixture, ReplayServer}`.
+
 - `agent-trace graph <trace-id>|--latest [--output PATH]`: the causal graph of a trace as one
   self-contained HTML file. Lanes per agent and per MCP server, cause / context / structure
   edges, a finding's evidence path, an event's ancestors and descendants, payload and links of

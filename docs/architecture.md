@@ -67,6 +67,16 @@
 The recorder lock is held only while recording, never across a call to the upstream server, so
 concurrent tool calls from the client are not serialized. Details: [proxy.md](proxy.md).
 
+## Replay (`agent-trace replay`)
+
+`agent_trace_mcp::ReplayFixture::from_trace` extracts the task, the offered tools and the tool
+results of a recorded trace; `ReplayServer` serves them as an MCP server (answers by exact
+arguments, then recording order; otherwise a tool error). `agent_trace_llm::replay_trace`
+connects it in-process and runs the unchanged LLM agent loop (`run_llm_scenario`) with the
+selected model and an optional system prompt. The CLI stores the replay, analyzes it, and
+`compare` / `verdict` line its findings up with the recording's: only findings with status
+`attempted`, `blocked` or `executed` (model actions) decide.
+
 ## Causal graph (`agent-trace graph`)
 
 `commands/graph.rs` fills `graph/template.html` with the redacted evidence report (the
