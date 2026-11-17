@@ -425,6 +425,46 @@ impl Store {
         Ok(())
     }
 
+    /// Delete a trace with its events, findings and evidence links. Returns whether it
+    /// existed. On SQLite, deleted content is overwritten (`secure_delete`), not only unlinked.
+    pub fn delete_trace(&mut self, trace_id: Uuid) -> Result<bool, StorageError> {
+        if self.dialect() == Dialect::Sqlite {
+            // A query, not an execute: the pragma returns its new value as a row.
+            self.rows("PRAGMA secure_delete = ON", &[])?;
+        }
+        let id = trace_id.to_string();
+        let deleted = self.transaction(|s| {
+            // Explicit deletes: foreign-key cascades are not enforced on every backend.
+            s.exec(
+                "DELETE FROM evidence_links WHERE finding_id IN \
+                 (SELECT finding_id FROM findings WHERE trace_id = ?)",
+                &[id.clone().into()],
+            )?;
+            s.exec(
+                "DELETE FROM findings WHERE trace_id = ?",
+                &[id.clone().into()],
+            )?;
+            s.exec(
+                "DELETE FROM events WHERE trace_id = ?",
+                &[id.clone().into()],
+            )?;
+            s.exec(
+                "DELETE FROM traces WHERE trace_id = ?",
+                &[id.clone().into()],
+            )
+        })?;
+        Ok(deleted > 0)
+    }
+
+    /// After deleting: write the SQLite WAL back into the database and truncate it, so
+    /// deleted content does not linger in the log. No-op on other backends.
+    pub fn compact(&mut self) -> Result<(), StorageError> {
+        if self.dialect() == Dialect::Sqlite {
+            self.rows("PRAGMA wal_checkpoint(TRUNCATE)", &[])?;
+        }
+        Ok(())
+    }
+
     /// All traces in persisted creation order (oldest first).
     pub fn list_traces(&mut self) -> Result<Vec<TraceSummary>, StorageError> {
         let rows = self.rows(

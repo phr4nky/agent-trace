@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use agent_trace_core::redact::{self, RedactionConfig};
+use agent_trace_core::rules::{CustomRule, CustomRuleConfig};
 use agent_trace_core::{Analyzer, PolicyConfig, ToolPolicy};
 use agent_trace_mcp::ProxyMode;
 use anyhow::{Context as _, bail};
@@ -25,6 +27,25 @@ pub struct Config {
     pub proxy: ProxySection,
     #[serde(default)]
     pub hooks: HooksSection,
+    /// Additional secret patterns and field names (added to the built-in rules).
+    #[serde(default)]
+    pub redaction: RedactionConfig,
+    /// Defaults for `agent-trace prune`.
+    #[serde(default)]
+    pub retention: RetentionSection,
+    /// Declarative detection rules (`[[rules]]`), run after the built-in ones.
+    #[serde(default)]
+    pub rules: Vec<CustomRuleConfig>,
+}
+
+/// The `[retention]` table.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetentionSection {
+    /// Delete traces older than this many days.
+    pub max_age_days: Option<u64>,
+    /// Keep at most this many traces (the newest).
+    pub max_traces: Option<usize>,
 }
 
 /// What `agent-trace hook` does when it cannot record or decide (e.g. the database is down).
@@ -79,8 +100,16 @@ impl Loaded {
         ToolPolicy::default().with_config(&self.config.policy)
     }
 
+    /// The analyzer: built-in rules with the configured policy, then the `[[rules]]`.
     pub fn analyzer(&self) -> Analyzer {
-        Analyzer::new(self.policy())
+        let mut analyzer = Analyzer::new(self.policy());
+        for config in &self.config.rules {
+            // Validated when the file was loaded.
+            if let Ok(rule) = CustomRule::new(config.clone()) {
+                analyzer = analyzer.with_rule(Box::new(rule));
+            }
+        }
+        analyzer
     }
 
     /// Say on stderr which file changed the defaults, so a gate's result can be explained.
@@ -138,7 +167,16 @@ fn parse_file(path: &Path) -> anyhow::Result<Config> {
 }
 
 pub fn parse(text: &str) -> anyhow::Result<Config> {
-    Ok(toml::from_str(text)?)
+    let config: Config = toml::from_str(text)?;
+    redact::validate_config(&config.redaction).map_err(anyhow::Error::msg)?;
+    let mut ids = std::collections::HashSet::new();
+    for rule in &config.rules {
+        CustomRule::new(rule.clone()).map_err(anyhow::Error::msg)?;
+        if !ids.insert(rule.id.as_str()) {
+            bail!("rule id {} is defined twice", rule.id);
+        }
+    }
+    Ok(config)
 }
 
 #[cfg(test)]

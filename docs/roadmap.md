@@ -6,6 +6,8 @@
   alerts at the line of the risky tool request in the trace file, evidence as a code flow
 - Tamper evidence: every JSONL export ends with a SHA-256 hash chain; `export --sign` adds an
   Ed25519 signature; `agent-trace verify` and `import` reject changed files
+- Retention (`agent-trace prune`, `[retention]`), redaction configuration (`[redaction]`), and
+  declarative custom rules (`[[rules]]`) plus documented Rust rules
 
 ## v1.4.0
 
@@ -60,4 +62,3 @@
 ## Next
 
 - OTLP ingestion with a versioned GenAI semantic-convention mapping
-- Retention and redaction configuration, rule/plugin SDK

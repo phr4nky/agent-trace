@@ -201,6 +201,8 @@ fn print_settings_is_valid_settings_json() {
     let data = tempfile::tempdir().unwrap();
     // An absolute path with a space, so it must be quoted (`D:\…` on Windows, `/…` elsewhere).
     let config = data.path().join("a b.toml");
+    // The named config must exist: a typo would otherwise end up in Claude Code's settings.
+    std::fs::write(&config, "").unwrap();
     let config = config.to_str().unwrap();
     let out = ok(&run(
         data.path(),

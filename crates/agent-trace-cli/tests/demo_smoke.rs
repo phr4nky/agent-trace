@@ -972,3 +972,124 @@ fn signed_exports_verify_and_edits_are_caught() {
     let out = bin(d, &["export", "--latest", "--format", "json", "--sign"]);
     assert_eq!(out.status.code(), Some(1));
 }
+
+#[test]
+fn configured_redaction_rules_and_retention() {
+    let data = tempfile::tempdir().unwrap();
+    let d = data.path();
+    // Not named agent-trace.toml: that name in the data directory would be found implicitly.
+    let config = d.join("custom.toml");
+    std::fs::write(
+        &config,
+        r#"
+[redaction]
+patterns = [{ label = "corp_token", regex = 'CORP-[A-Z0-9]{20}' }]
+keys = ["x-corp-auth"]
+
+[retention]
+max_traces = 2
+
+[[rules]]
+id = "CORP-001"
+title = "Mock shell command after untrusted content"
+severity = "high"
+tools = ["run_command*"]
+arguments = { command = 'SIMULATED' }
+after_untrusted = true
+"#,
+    )
+    .unwrap();
+    let c = config.to_str().unwrap();
+
+    // Custom rule: fires on the scripted prompt-injection run.
+    ok(&bin(
+        d,
+        &[
+            "--config",
+            c,
+            "demo",
+            "run",
+            "--scenario",
+            "prompt-injection",
+        ],
+    ));
+    let analysis = ok(&bin(d, &["--config", c, "analyze", "--latest"]));
+    assert!(analysis.contains("CORP-001"), "{analysis}");
+
+    // Configured redaction: applied on import, before anything is stored.
+    let token = "CORP-ABCDEFGHIJ0123456789";
+    let trace = d.join("in.jsonl");
+    let tid = "6a1f3c2e-9b7d-4e15-a0c8-52d41e9f7b33";
+    std::fs::write(
+        &trace,
+        format!(
+            "{{\"record_type\":\"trace\",\"schema_version\":\"1.1\",\"trace_id\":\"{tid}\",\"name\":\"t\",\"created_at\":\"2026-01-01T00:00:00Z\",\"execution_mode\":\"live\",\"metadata\":{{}}}}\n\
+             {{\"record_type\":\"event\",\"schema_version\":\"1.1\",\"event_id\":\"0b8e51c4-7a2d-4f60-9e13-c5a7d2f86e41\",\"trace_id\":\"{tid}\",\"sequence\":1,\"timestamp\":\"2026-01-01T00:00:01Z\",\"kind\":\"tool_result_received\",\"parent_event_id\":null,\"caused_by_event_id\":null,\"origin\":\"mcp_tool\",\"trust_level\":\"lower_trust\",\"name\":\"read\",\"payload\":{{\"content\":\"ticket {token}\",\"headers\":{{\"X-Corp-Auth\":\"abc\"}}}},\"execution_mode\":\"live\",\"metadata\":{{}}}}\n"
+        ),
+    )
+    .unwrap();
+    ok(&bin(
+        d,
+        &["--config", c, "import", "--input", trace.to_str().unwrap()],
+    ));
+    let shown = ok(&bin(d, &["--config", c, "trace", "show", tid, "--payload"]));
+    assert!(!shown.contains(token), "{shown}");
+    assert!(shown.contains("[REDACTED:corp_token]"), "{shown}");
+    let db = std::fs::read(d.join("agent-trace.sqlite3")).unwrap();
+    assert!(
+        !db.windows(token.len()).any(|w| w == token.as_bytes()),
+        "never stored"
+    );
+
+    // Retention: two traces now; demo adds four more; prune keeps the newest two.
+    ok(&bin(
+        d,
+        &["--config", c, "demo", "run", "--scenario", "all"],
+    ));
+    let count = |out: &str| out.lines().skip(1).filter(|l| !l.trim().is_empty()).count();
+    assert_eq!(count(&ok(&bin(d, &["trace", "list"]))), 6);
+    let dry = ok(&bin(d, &["--config", c, "prune", "--dry-run"]));
+    assert!(
+        dry.contains("4 trace(s)") && dry.contains("dry run"),
+        "{dry}"
+    );
+    assert_eq!(
+        count(&ok(&bin(d, &["trace", "list"]))),
+        6,
+        "dry run deletes nothing"
+    );
+    ok(&bin(d, &["--config", c, "prune"]));
+    assert_eq!(count(&ok(&bin(d, &["trace", "list"]))), 2);
+    ok(&bin(d, &["prune", "--keep", "1"]));
+    assert_eq!(count(&ok(&bin(d, &["trace", "list"]))), 1);
+    // Without criteria: an error, not "delete everything".
+    assert_eq!(bin(d, &["prune"]).status.code(), Some(1));
+
+    // A broken rule in the config is an error for every command.
+    std::fs::write(
+        &config,
+        "[[rules]]\nid = \"AT-777\"\ntitle = \"x\"\nseverity = \"high\"\n",
+    )
+    .unwrap();
+    let out = bin(d, &["--config", c, "analyze", "--latest"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("reserved"));
+}
+
+#[test]
+fn an_invalid_config_stops_every_command() {
+    let data = tempfile::tempdir().unwrap();
+    let config = data.path().join("bad.toml");
+    std::fs::write(
+        &config,
+        "[redaction]\npatterns = [{ label = \"x\", regex = \"(\" }]\n",
+    )
+    .unwrap();
+    for args in [vec!["trace", "list"], vec!["export", "--latest"]] {
+        let mut all = vec!["--config", config.to_str().unwrap()];
+        all.extend(args);
+        let out = bin(data.path(), &all);
+        assert_eq!(out.status.code(), Some(1), "{all:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("redaction pattern"));
+    }
+}

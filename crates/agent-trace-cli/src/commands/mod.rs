@@ -6,6 +6,7 @@ pub mod hook;
 pub mod import;
 pub mod keys;
 pub mod proxy;
+pub mod prune;
 pub mod replay;
 pub mod sarif;
 pub mod trace;

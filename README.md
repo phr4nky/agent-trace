@@ -384,6 +384,7 @@ agent-trace replay trace <trace-id>|--latest|--input FILE --provider P [--model 
                          [--prompt TEXT] [--runs N] [--fail-on SEVERITY] [--report PATH]
 agent-trace replay suite FILE --provider P [--model M] [--system-prompt FILE] [--report PATH]
 agent-trace import --format jsonl --input PATH
+agent-trace prune [--older-than AGE] [--keep N] [--dry-run]
 agent-trace hook [--mode observe|enforce] [--print-settings]
 agent-trace proxy [--name NAME] [--mode observe|enforce] [--session KEY | --no-session]
                   ( --url URL [--bearer-token-env VAR] | -- <server command> [args...] )
@@ -394,7 +395,7 @@ agent-trace --help
 |---|---|
 | `--data-dir PATH` | Where SQLite and exports live. The default is the per-user data dir (`~/Library/Application Support/agent-trace` on macOS, `~/.local/share/agent-trace` on Linux). Also settable via `AGENT_TRACE_DATA_DIR` |
 | `--database-url URL` | Use another database, see [Storage](#storage-sqlite-postgresql-mariadb-mysql). Also settable via `AGENT_TRACE_DATABASE_URL` |
-| `--config PATH` | Policy additions and proxy settings, see [docs/proxy.md](docs/proxy.md#configuration). Default: `AGENT_TRACE_CONFIG`, then `./agent-trace.toml`, then `agent-trace.toml` in the data dir |
+| `--config PATH` | Policy, proxy, hooks, redaction, retention and custom rules, see [docs/configuration.md](docs/configuration.md). Default: `AGENT_TRACE_CONFIG`, then `./agent-trace.toml`, then `agent-trace.toml` in the data dir |
 | `--no-color` | No ANSI colors. `NO_COLOR=1` works too |
 | `-v`, `-vv` | Diagnostic logs on stderr (redacted) |
 
@@ -444,6 +445,10 @@ agent-trace demo run     # all commands now use that database
   - MySQL/MariaDB: `?ssl-mode=required|disabled`. The default is `required` unless the driver connects through a socket or to a loopback address (after any `?host=` override).
 - **Credentials:** prefer the environment variable over `--database-url`, so the password does not end up in your shell history. Passwords in URLs are always shown as `[REDACTED…]` in output and errors.
 - Only **redacted** data is ever written to any backend.
+- **Retention:** `agent-trace prune --older-than 30d` (or `--keep N`, or `[retention]` in
+  `agent-trace.toml`) deletes old traces with their events and findings; traces still being
+  recorded are kept. On SQLite, deleted content is overwritten and the WAL truncated. Run it from
+  cron; see [docs/configuration.md](docs/configuration.md#retention-and-agent-trace-prune).
 
 ---
 
@@ -734,6 +739,21 @@ Every finding includes the rule ID and version, severity, confidence, attempt st
 event IDs and a remediation hint. Analysis is deterministic and idempotent: the same trace and rule
 version always give the same finding IDs.
 
+**Your own rules** go into `agent-trace.toml`, no code needed:
+
+```toml
+[[rules]]
+id = "CORP-001"
+title = "Download piped into a shell"
+severity = "high"
+tools = ["Bash", "run_command*"]
+arguments = { command = 'curl[^|]*\|\s*(ba)?sh' }
+after_untrusted = true        # only after lower-trust content, like AT-002
+```
+
+Rules can also match lower-trust content (`on = "content"`). Rust users implement the `Rule`
+trait. See [docs/rules.md](docs/rules.md).
+
 ---
 
 ## Security and privacy
@@ -747,7 +767,7 @@ version always give the same finding IDs.
 
 **Residual risks:**
 
-- Regex redaction can miss unknown secret formats.
+- Regex redaction can miss unknown secret formats; add your own in `[redaction]` (see [docs/configuration.md](docs/configuration.md#redaction)).
 - SQLite is not encrypted at rest.
 - The trace database is not tamper-evident; signed JSONL exports are (see [Export evidence](#5-export-evidence)).
 

@@ -134,6 +134,22 @@ fn conformance(mut store: Store) {
     // Secrets never stored.
     let raw = format!("{:?}", store.load_trace(a.trace.trace_id).unwrap());
     assert!(!raw.contains("FAKE_SECRET_FOR_TESTING_ONLY"));
+
+    // Deleting a trace removes it with its events and findings, and only it.
+    assert!(store.delete_trace(a.trace.trace_id).unwrap());
+    assert!(matches!(
+        store.load_trace(a.trace.trace_id),
+        Err(StorageError::TraceNotFound(_))
+    ));
+    assert!(store.load_findings(a.trace.trace_id).unwrap().is_empty());
+    assert!(
+        !store.delete_trace(a.trace.trace_id).unwrap(),
+        "already gone"
+    );
+    assert_eq!(store.load_trace(b.trace.trace_id).unwrap(), b);
+    store.compact().unwrap();
+    // The id can be used again (no leftover rows).
+    store.insert_trace(&a, TraceSource::Recorded).unwrap();
 }
 
 #[test]

@@ -209,6 +209,106 @@ fn is_placeholder(value: &str) -> bool {
         && !tail.chars().any(char::is_alphanumeric)
 }
 
+/// User additions to the redaction rules (the `[redaction]` table of `agent-trace.toml`).
+/// They are added to the built-in rules, which cannot be removed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedactionConfig {
+    /// Secret formats: a label and a regular expression. With a capture group named `value`,
+    /// only that group is replaced; otherwise the whole match.
+    #[serde(default)]
+    pub patterns: Vec<PatternConfig>,
+    /// Field names whose values are always replaced (case-insensitive, `-` and `_` alike).
+    #[serde(default)]
+    pub keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PatternConfig {
+    /// Shown in the placeholder `[REDACTED:<label>]`: lowercase letters and `_`, at most 32.
+    pub label: String,
+    pub regex: String,
+}
+
+/// Compiled user additions.
+struct Extra {
+    patterns: Vec<(String, Regex)>,
+    keys: Vec<String>,
+}
+
+static EXTRA: OnceLock<Extra> = OnceLock::new();
+
+/// Maximum compiled size of a configured pattern (keeps hostile or accidental patterns cheap).
+const MAX_PATTERN_BYTES: usize = 1 << 20;
+
+fn normalize_field(key: &str) -> String {
+    key.trim().to_ascii_lowercase().replace('-', "_")
+}
+
+/// Check `config` without installing it.
+pub fn validate_config(config: &RedactionConfig) -> Result<(), String> {
+    compile(config).map(|_| ())
+}
+
+fn compile(config: &RedactionConfig) -> Result<Extra, String> {
+    let mut patterns = Vec::new();
+    for p in &config.patterns {
+        if p.label.is_empty()
+            || p.label.len() > 32
+            || !p.label.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+        {
+            return Err(format!(
+                "redaction label {:?}: use 1 to 32 lowercase letters or `_`",
+                p.label
+            ));
+        }
+        let regex = regex::RegexBuilder::new(&p.regex)
+            .size_limit(MAX_PATTERN_BYTES)
+            .build()
+            .map_err(|e| format!("redaction pattern {:?}: {e}", p.label))?;
+        if regex.is_match("") {
+            return Err(format!(
+                "redaction pattern {:?} matches the empty string",
+                p.label
+            ));
+        }
+        patterns.push((p.label.clone(), regex));
+    }
+    let keys = config
+        .keys
+        .iter()
+        .map(|k| normalize_field(k))
+        .filter(|k| !k.is_empty())
+        .collect();
+    Ok(Extra { patterns, keys })
+}
+
+/// Add `config` to the redaction rules of this process; every [`Redactor`] uses it from
+/// now on. Call it once, before recording or exporting. A second call with a different
+/// configuration is an error.
+pub fn configure(config: &RedactionConfig) -> Result<(), String> {
+    let extra = compile(config)?;
+    let same = |e: &Extra| {
+        e.keys == extra.keys
+            && e.patterns.len() == extra.patterns.len()
+            && e.patterns
+                .iter()
+                .zip(&extra.patterns)
+                .all(|(a, b)| a.0 == b.0 && a.1.as_str() == b.1.as_str())
+    };
+    if let Some(existing) = EXTRA.get() {
+        return if same(existing) {
+            Ok(())
+        } else {
+            Err("the redaction configuration was already set".into())
+        };
+    }
+    EXTRA
+        .set(extra)
+        .map_err(|_| "the redaction configuration was already set".to_owned())
+}
+
 /// Redacts secrets and enforces size limits.
 #[derive(Debug, Clone, Default)]
 pub struct Redactor;
@@ -240,6 +340,26 @@ impl Redactor {
             });
             if let std::borrow::Cow::Owned(new_text) = replaced {
                 text = new_text;
+            }
+        }
+        if let Some(extra) = EXTRA.get() {
+            for (label, regex) in &extra.patterns {
+                let placeholder = format!("{REDACTED_PREFIX}:{label}]");
+                let replaced = regex.replace_all(&text, |caps: &Captures<'_>| {
+                    let whole = caps.get(0).expect("group 0");
+                    let value = caps.name("value").unwrap_or(whole);
+                    if is_placeholder(value.as_str()) {
+                        return whole.as_str().to_owned();
+                    }
+                    report.redactions += 1;
+                    let w = whole.as_str();
+                    let start = value.start() - whole.start();
+                    let end = value.end() - whole.start();
+                    format!("{}{}{}", &w[..start], placeholder, &w[end..])
+                });
+                if let std::borrow::Cow::Owned(new_text) = replaced {
+                    text = new_text;
+                }
             }
         }
         if text.len() > MAX_STRING_BYTES && !is_truncated_form(&text) {
@@ -292,7 +412,10 @@ impl Redactor {
                     std::collections::HashMap::new();
                 for (key, v) in map {
                     let is_secret_key = sensitive_key().is_match(key)
-                        || (v.is_string() && secret_key_by_segment(key));
+                        || (v.is_string() && secret_key_by_segment(key))
+                        || EXTRA
+                            .get()
+                            .is_some_and(|e| e.keys.contains(&normalize_field(key)));
                     let already = v.as_str().is_some_and(is_placeholder);
                     let new_value = if is_secret_key && !v.is_null() && !already {
                         report.redactions += 1;
