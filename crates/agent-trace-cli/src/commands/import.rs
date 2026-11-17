@@ -29,6 +29,18 @@ pub fn run(
         imported.record.events.len(),
         imported.redactions
     );
+    match &imported.integrity {
+        Some(v) => outln!(
+            "integrity: unchanged since export ({} records){}",
+            v.lines,
+            match &v.signed_by {
+                Some((key_id, _)) =>
+                    format!(", signed by key {key_id} (check it with `agent-trace verify`)"),
+                None => ", unsigned".into(),
+            }
+        ),
+        None => outln!("integrity: no integrity record (hand-written or older export)"),
+    }
     if imported.ignored_findings > 0 {
         outln!(
             "ignored {} finding record(s) from the file; findings were recomputed locally",

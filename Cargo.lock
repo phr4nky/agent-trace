@@ -109,6 +109,7 @@ dependencies = [
  "libc",
  "mysql",
  "postgres",
+ "ring",
  "rusqlite",
  "rustls",
  "serde",

@@ -2,7 +2,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use agent_trace_storage::{
-    SarifTrace, create_private_file, write_json_report, write_jsonl, write_sarif,
+    SarifTrace, create_private_file, write_json_report, write_jsonl_signed, write_sarif,
 };
 
 use super::{Context, analyze_and_store, resolve_target};
@@ -15,7 +15,14 @@ pub fn run(
     format: ExportFormat,
     output: Option<&Path>,
     artifact_uri: Option<&str>,
+    // `Some(key path or default)` to sign.
+    sign: Option<Option<&Path>>,
 ) -> anyhow::Result<u8> {
+    let key = match (sign, format) {
+        (None, _) => None,
+        (Some(path), ExportFormat::Jsonl) => Some(super::keys::load_key(ctx, path)?),
+        (Some(_), _) => anyhow::bail!("--sign is supported for --format jsonl"),
+    };
     let mut store = ctx.open_store()?;
     let id = resolve_target(&mut store, target)?;
     let record = store.load_trace(id)?;
@@ -29,7 +36,7 @@ pub fn run(
     };
     match format {
         ExportFormat::Json => write_json_report(writer, &record, &findings)?,
-        ExportFormat::Jsonl => write_jsonl(writer, &record, &findings)?,
+        ExportFormat::Jsonl => write_jsonl_signed(writer, &record, &findings, key.as_ref())?,
         ExportFormat::Sarif => {
             let uri = artifact_uri
                 .map(str::to_owned)
@@ -48,6 +55,9 @@ pub fn run(
     }
     if let Some(path) = output {
         eprintln!("exported trace {id} (redacted) to {}", path.display());
+    }
+    if let Some(key) = &key {
+        eprintln!("signed with key {}", key.key_id());
     }
     Ok(EXIT_OK)
 }

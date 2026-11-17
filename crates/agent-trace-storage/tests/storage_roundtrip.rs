@@ -124,7 +124,7 @@ fn import_redacts_untrusted_raw_secrets() {
     let rec = synthetic("raw");
     let mut lines = Vec::new();
     write_jsonl(&mut lines, &rec, &[]).unwrap();
-    let text = String::from_utf8(lines).unwrap().replace(
+    let text = without_integrity(String::from_utf8(lines).unwrap()).replace(
         "[REDACTED:test_secret]",
         "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
     );
@@ -140,7 +140,7 @@ fn corrupt_imports_fail_with_diagnostics() {
     let rec = synthetic("bad");
     let mut buf = Vec::new();
     write_jsonl(&mut buf, &rec, &[]).unwrap();
-    let good = String::from_utf8(buf).unwrap();
+    let good = without_integrity(String::from_utf8(buf).unwrap());
     let lines: Vec<&str> = good.lines().collect();
 
     let cases: Vec<(String, &str)> = vec![
@@ -236,7 +236,7 @@ fn import_and_recorder_redact_agent_ids_and_names() {
     let rec = synthetic("agent");
     let mut lines = Vec::new();
     write_jsonl(&mut lines, &rec, &[]).unwrap();
-    let text = String::from_utf8(lines).unwrap();
+    let text = without_integrity(String::from_utf8(lines).unwrap());
     let text = text.replacen(
         "\"record_type\":\"event\"",
         &format!("\"record_type\":\"event\",\"agent_id\":\"{token}\""),
@@ -364,4 +364,69 @@ mod hunt_storage_regressions {
         let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
     }
+}
+
+/// A hand-written file: an export without its integrity record.
+fn without_integrity(text: String) -> String {
+    text.lines()
+        .filter(|l| !l.contains("\"record_type\":\"integrity\""))
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
+#[test]
+fn exports_carry_a_verified_hash_chain() {
+    let rec = synthetic("chain");
+    let mut buf = Vec::new();
+    write_jsonl(&mut buf, &rec, &[]).unwrap();
+    let text = String::from_utf8(buf).unwrap();
+    assert!(
+        text.lines()
+            .last()
+            .unwrap()
+            .contains("\"record_type\":\"integrity\"")
+    );
+    let imported = read_jsonl(text.as_bytes()).unwrap();
+    let verified = imported.integrity.expect("verified");
+    assert_eq!(verified.lines as usize, rec.events.len() + 1);
+    assert_eq!(verified.signed_by, None);
+    // Hand-written files without integrity record still import.
+    assert!(
+        read_jsonl(without_integrity(text.clone()).as_bytes())
+            .unwrap()
+            .integrity
+            .is_none()
+    );
+
+    // Any edit of an exported file is rejected, with the line of the integrity record.
+    let edited = text.replacen(
+        "\"trust_level\":\"lower_trust\"",
+        "\"trust_level\":\"trusted\"",
+        1,
+    );
+    assert_ne!(edited, text);
+    let err = read_jsonl(edited.as_bytes()).unwrap_err().to_string();
+    assert!(err.contains("changed after it was exported"), "{err}");
+    let lines: Vec<&str> = text.lines().collect();
+    let dropped = [&lines[..2], &lines[3..]].concat().join("\n");
+    assert!(
+        read_jsonl(dropped.as_bytes()).is_err(),
+        "a removed event is detected"
+    );
+    let appended = format!("{text}{}\n", lines[1]);
+    let err = read_jsonl(appended.as_bytes()).unwrap_err().to_string();
+    assert!(err.contains("after the integrity record"), "{err}");
+}
+
+#[test]
+fn signed_exports_name_their_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = agent_trace_storage::SigningKey::generate(&dir.path().join("k.pk8")).unwrap();
+    let rec = synthetic("signed");
+    let mut buf = Vec::new();
+    agent_trace_storage::write_jsonl_signed(&mut buf, &rec, &[], Some(&key)).unwrap();
+    let imported = read_jsonl(buf.as_slice()).unwrap();
+    let (key_id, public) = imported.integrity.unwrap().signed_by.unwrap();
+    assert_eq!(key_id, key.key_id());
+    assert_eq!(public, key.public_key());
 }

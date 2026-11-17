@@ -8,6 +8,13 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+**Upgrade notes:**
+
+- JSONL exports end with a new `integrity` record. `import` of older versions of agent-trace
+  rejects such files as an unknown record type; remove the last line to import them there.
+- `import` rejects an exported file that was changed after export. Files without an integrity
+  record (hand-written traces) are accepted as before.
+
 ### Added
 
 - `agent-trace sarif FILE... [--output PATH] [--fail-on SEVERITY]`: convert JSONL trace files into
@@ -19,6 +26,15 @@ The section of a version is used as the release notes of its GitHub release.
   `import`; nothing is stored.
 - `export --format sarif [--artifact-uri URI]` for a stored trace.
 - `Rule::description` and `Rule::default_severity` (with defaults) for rule metadata.
+- Tamper evidence for exports: every JSONL export ends with an integrity record, a SHA-256 hash
+  chain over all other lines with checkpoints. `import` and the new `agent-trace verify FILE`
+  reject a file that was changed, shortened, reordered or extended after export.
+- Signed exports: `agent-trace keys generate|show` creates an Ed25519 key (PKCS#8, mode 0600,
+  never overwritten), `export --format jsonl --sign [--key PATH]` signs the chain head, and
+  `verify` accepts the signature only for a trusted key (`--public-key HEX|FILE`, or your own
+  key); `--require-signature` rejects unsigned files.
+- Library: `agent_trace_storage::{integrity, write_jsonl_signed, SigningKey}`;
+  `Imported::integrity`.
 
 ## [1.4.0] - 2026-11-17
 

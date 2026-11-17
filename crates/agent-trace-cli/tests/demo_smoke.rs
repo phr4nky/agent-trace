@@ -289,10 +289,15 @@ fn deterministic_demo_matches_golden_traces() {
     let update = std::env::var_os("UPDATE_GOLDEN").is_some();
     for (scenario, id) in trace_ids(data.path()) {
         let out = ok(&bin(data.path(), &["export", &id, "--format", "jsonl"]));
-        // Findings carry the analysis time; the golden file pins trace + events only.
+        // Findings carry the analysis time; the golden file pins trace + events only. The
+        // integrity record covers the findings too, so it is left out as well (the hash
+        // chain has its own tests in agent-trace-storage).
         let normalized: String = out
             .lines()
-            .filter(|l| !l.contains("\"record_type\":\"finding\""))
+            .filter(|l| {
+                !l.contains("\"record_type\":\"finding\"")
+                    && !l.contains("\"record_type\":\"integrity\"")
+            })
             .map(|l| format!("{l}\n"))
             .collect();
         let path = golden_dir.join(format!("{scenario}.jsonl"));
@@ -893,4 +898,77 @@ fn sarif_from_trace_files_points_at_their_lines() {
             .code(),
         Some(1)
     );
+}
+
+#[test]
+fn signed_exports_verify_and_edits_are_caught() {
+    let data = tempfile::tempdir().unwrap();
+    let d = data.path();
+    let stdout = ok(&bin(d, &["keys", "generate"]));
+    assert!(stdout.contains("created signing key"), "{stdout}");
+    assert_eq!(
+        bin(d, &["keys", "generate"]).status.code(),
+        Some(1),
+        "never overwrite"
+    );
+    let key_dir = d.join("keys");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&key_dir.join("signing-key.pk8")), 0o600);
+        assert_eq!(mode(&key_dir.join("signing-key.pk8.pub")), 0o644);
+    }
+
+    ok(&bin(d, &["demo", "run", "--scenario", "exfil-attempt"]));
+    let signed = d.join("signed.jsonl");
+    let s = signed.to_str().unwrap();
+    ok(&bin(
+        d,
+        &[
+            "export", "--latest", "--format", "jsonl", "--sign", "--output", s,
+        ],
+    ));
+    let out = ok(&bin(d, &["verify", s]));
+    assert!(
+        out.contains("signed by key") && out.contains("your signing key"),
+        "{out}"
+    );
+
+    // Elsewhere (no local key) the signer must be named.
+    let other = tempfile::tempdir().unwrap();
+    let out = bin(other.path(), &["verify", s]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("not trusted"));
+    let pub_file = key_dir.join("signing-key.pk8.pub");
+    ok(&bin(
+        other.path(),
+        &["verify", s, "--public-key", pub_file.to_str().unwrap()],
+    ));
+
+    // An edited copy fails verification and import.
+    let text = std::fs::read_to_string(&signed).unwrap();
+    let edited = d.join("edited.jsonl");
+    std::fs::write(&edited, text.replacen("example.invalid", "example.org", 1)).unwrap();
+    let e = edited.to_str().unwrap();
+    let out = bin(d, &["verify", e]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("changed after it was exported"));
+    assert_eq!(bin(d, &["import", "--input", e]).status.code(), Some(1));
+
+    // Unsigned: consistent, but proves no origin.
+    let unsigned = d.join("unsigned.jsonl");
+    let u = unsigned.to_str().unwrap();
+    ok(&bin(
+        d,
+        &["export", "--latest", "--format", "jsonl", "--output", u],
+    ));
+    assert!(ok(&bin(d, &["verify", u])).contains("unsigned"));
+    assert_eq!(
+        bin(d, &["verify", u, "--require-signature"]).status.code(),
+        Some(1)
+    );
+    // Signing is for JSONL.
+    let out = bin(d, &["export", "--latest", "--format", "json", "--sign"]);
+    assert_eq!(out.status.code(), Some(1));
 }

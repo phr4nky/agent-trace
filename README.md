@@ -218,6 +218,22 @@ agent-trace export --latest --format jsonl --output trace.jsonl   # re-importabl
 Exports are **always redacted**. In the exfil scenario the stored request body reads
 `API_TOKEN=[REDACTED:test_secret]`.
 
+**Tamper evidence.** A JSONL export ends with an integrity record: a SHA-256 hash chain over all
+other lines. Changing, removing, reordering or adding a line breaks it, and `import` rejects the
+file. Sign exports to show who wrote them:
+
+```bash
+agent-trace keys generate                                  # Ed25519 key in the data directory
+agent-trace export --latest --format jsonl --sign --output trace.jsonl
+agent-trace verify trace.jsonl                             # your own key is trusted
+agent-trace verify trace.jsonl --public-key colleague.pub  # someone else's export
+```
+
+An unsigned chain only shows that a file is consistent: whoever edits it can recompute the
+chain. A signature by a key you trust shows that the file is the one its holder exported.
+`verify` exits with 1 when the chain is broken, the signature is invalid, or the signer is not
+a trusted key. The database itself is not protected: export and sign evidence you want to keep.
+
 ---
 
 ## Watching live
@@ -360,6 +376,9 @@ agent-trace analyze <trace-id>|--latest [--fail-on low|medium|high|critical]
 agent-trace explore <trace-id>|--latest [--follow] [--snapshot [--keys KEYS] [--size COLSxROWS]]
 agent-trace export <trace-id>|--latest --format json|jsonl|sarif [--output PATH] [--artifact-uri URI]
 agent-trace sarif FILE... [--output PATH] [--fail-on low|medium|high|critical]
+agent-trace export <trace-id>|--latest --format json|jsonl [--output PATH] [--sign [--key PATH]]
+agent-trace verify FILE [--public-key HEX|FILE]... [--require-signature]
+agent-trace keys generate|show [--key PATH]
 agent-trace graph <trace-id>|--latest [--output PATH]
 agent-trace replay trace <trace-id>|--latest|--input FILE --provider P [--model M] [--system-prompt FILE]
                          [--prompt TEXT] [--runs N] [--fail-on SEVERITY] [--report PATH]
@@ -730,7 +749,7 @@ version always give the same finding IDs.
 
 - Regex redaction can miss unknown secret formats.
 - SQLite is not encrypted at rest.
-- Traces are not yet tamper-evident.
+- The trace database is not tamper-evident; signed JSONL exports are (see [Export evidence](#5-export-evidence)).
 
 See [SECURITY.md](SECURITY.md) and [docs/security-model.md](docs/security-model.md).
 
@@ -780,7 +799,6 @@ Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Roadmap
 
 - OTLP/OpenTelemetry GenAI import
-- Tamper-evident traces (hash chains, signed exports)
 
 See [docs/roadmap.md](docs/roadmap.md).
 
