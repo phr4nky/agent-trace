@@ -187,7 +187,27 @@ The explorer needs a real terminal. In scripts, CI or chat tools, render a text 
 agent-trace explore --latest --snapshot --keys fjj --size 150x40
 ```
 
-### 4. Export evidence
+### 4. See the causal graph
+
+```bash
+agent-trace graph --latest
+```
+
+Writes a single HTML file (to the exports directory, or `--output PATH`) and prints its path.
+Open it in any browser:
+
+- **Lanes** for each agent and each MCP server, time from left to right.
+- **Edges:** solid = caused by, dashed = context (content in view), faint = structure.
+- **Click a finding** to highlight its evidence path; **click an event** to highlight everything
+  it came from and led to, and to read its (redacted) payload and links.
+- Pan by dragging, zoom with the wheel, search events, Esc clears.
+
+The page is self-contained and makes no network requests: no CDN, no fonts, no server. Its
+Content-Security-Policy allows only its own inline script and style (by hash) and no
+connections, and trace content is only ever inserted as text, so an injected payload in a trace
+cannot run in your browser. It contains the same redacted data as `export --format json`.
+
+### 5. Export evidence
 
 ```bash
 agent-trace export --latest --format json  --output report.json   # findings + events
@@ -314,6 +334,7 @@ agent-trace trace show <trace-id>|--latest [--payload]
 agent-trace analyze <trace-id>|--latest [--fail-on low|medium|high|critical]
 agent-trace explore <trace-id>|--latest [--follow] [--snapshot [--keys KEYS] [--size COLSxROWS]]
 agent-trace export <trace-id>|--latest --format json|jsonl [--output PATH]
+agent-trace graph <trace-id>|--latest [--output PATH]
 agent-trace import --format jsonl --input PATH
 agent-trace hook [--mode observe|enforce] [--print-settings]
 agent-trace proxy [--name NAME] [--mode observe|enforce] [--session KEY | --no-session]
@@ -687,7 +708,6 @@ Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Roadmap
 
 - OTLP/OpenTelemetry GenAI import
-- Causal graph view
 - SARIF export for GitHub code scanning
 - Tamper-evident traces (hash chains, signed exports)
 

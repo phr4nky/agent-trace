@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="{{CSP}}">
+<meta name="referrer" content="no-referrer">
+<title>agent-trace graph</title>
+<style>{{STYLE}}</style>
+</head>
+<body>
+<header>
+  <h1 id="trace-name">agent-trace</h1>
+  <div class="meta" id="trace-meta"></div>
+  <div class="banner" id="simulated">SIMULATED: decisions come from a scripted demo agent; privileged tools are mocks.</div>
+</header>
+<div class="toolbar">
+  <label><input type="checkbox" id="show-cause" checked> causes</label>
+  <label><input type="checkbox" id="show-context" checked> context</label>
+  <label><input type="checkbox" id="show-parent"> structure</label>
+  <input type="search" id="search" placeholder="Search events…" aria-label="Search events">
+  <button type="button" id="fit">Fit</button>
+  <button type="button" id="clear">Clear</button>
+  <span class="hint">Click an event or finding · drag to pan · wheel to zoom · Esc clears</span>
+</div>
+<div id="graph"><svg id="svg" role="img" aria-label="Causal graph of the trace"></svg></div>
+<aside>
+  <section>
+    <h2>Findings</h2>
+    <div id="findings"></div>
+  </section>
+  <section>
+    <h2>Event</h2>
+    <div id="details"><p class="empty">Select an event to see its links and payload.</p></div>
+  </section>
+  <section>
+    <h2>Legend</h2>
+    <div class="legend" id="legend"></div>
+  </section>
+  <section><p class="disclaimer" id="disclaimer"></p></section>
+</aside>
+<script type="application/json" id="trace-data">{{DATA}}</script>
+<script>{{SCRIPT}}</script>
+</body>
+</html>

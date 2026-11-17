@@ -1,6 +1,7 @@
 pub mod analyze;
 pub mod demo;
 pub mod export;
+pub mod graph;
 pub mod hook;
 pub mod import;
 pub mod proxy;
