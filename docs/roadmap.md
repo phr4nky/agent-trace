@@ -1,6 +1,12 @@
 # Roadmap
 
-## v1.3.0 (this release)
+## Unreleased
+
+- `agent-trace hook`: Claude Code hooks record a whole session (prompts, built-in tools, MCP
+  tools, subagents) as one trace and can deny tool calls before they run
+- Claude Code's Bash, PowerShell, Write, Edit, MultiEdit and NotebookEdit are privileged by default
+
+## v1.3.0
 
 - `agent-trace proxy`: record and optionally enforce the traffic between any MCP client and an
   MCP server over stdio
@@ -38,7 +44,6 @@
 ## Next
 
 - MCP proxy over streamable HTTP; one trace across several proxied servers of a session
-- Claude Code hooks adapter for built-in tools (Bash, Write, WebFetch), in the same trace as MCP tools
 - OTLP ingestion with a versioned GenAI semantic-convention mapping
 - Interactive causal graph (Angular + Cytoscape.js or equivalent)
 - SARIF export and GitHub Code Scanning integration

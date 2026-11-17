@@ -107,6 +107,13 @@ impl Default for ToolPolicy {
                 "send_webhook_mock",
                 "http_request",
                 "send_email",
+                // Claude Code's built-in tools that run commands or change files.
+                "Bash",
+                "PowerShell",
+                "Write",
+                "Edit",
+                "MultiEdit",
+                "NotebookEdit",
             ]
             .map(String::from)
             .to_vec(),
@@ -244,6 +251,56 @@ impl ToolPolicy {
         PolicyOutcome {
             decision: Decision::Allow,
             reason: "read-only tool".into(),
+        }
+    }
+}
+
+impl ToolPolicy {
+    /// The verdict on a tool call in a recorded session, used by the MCP proxy and the
+    /// Claude Code hooks. `tainted` names the sources of the lower-trust content that entered
+    /// the session so far (oldest first). Denied: an outbound call to a destination that is
+    /// not allowlisted, and a privileged call after any tainted content.
+    pub fn evaluate_in_session(
+        &self,
+        tool: &str,
+        arguments: &Map<String, Value>,
+        tainted: &[&str],
+    ) -> PolicyOutcome {
+        let deny = |reason: String| PolicyOutcome {
+            decision: Decision::Deny,
+            reason,
+        };
+        if self.is_outbound(tool)
+            && let Some(destination) = self.disallowed_destination(arguments)
+        {
+            return deny(format!(
+                "outbound destination host {:?} is not on the allowlist",
+                host_of(&destination).unwrap_or_default()
+            ));
+        }
+        if self.is_privileged(tool) && !tainted.is_empty() {
+            let mut sources: Vec<&str> = Vec::new();
+            for s in tainted.iter().rev() {
+                if !sources.contains(s) {
+                    sources.push(s);
+                }
+            }
+            let shown = sources[..sources.len().min(3)].join(", ");
+            let more = if sources.len() > 3 { ", …" } else { "" };
+            return deny(format!(
+                "privileged tool requested after lower-trust content entered the session \
+                 (from {shown}{more})"
+            ));
+        }
+        PolicyOutcome {
+            decision: Decision::Allow,
+            reason: if self.is_outbound(tool) {
+                "destination allowlisted; no lower-trust content in the session".into()
+            } else if self.is_privileged(tool) {
+                "privileged tool; no lower-trust content in the session".into()
+            } else {
+                "not a privileged tool".into()
+            },
         }
     }
 }

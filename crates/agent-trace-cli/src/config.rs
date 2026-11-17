@@ -23,7 +23,37 @@ pub struct Config {
     pub policy: PolicyConfig,
     #[serde(default)]
     pub proxy: ProxySection,
+    #[serde(default)]
+    pub hooks: HooksSection,
 }
+
+/// What `agent-trace hook` does when it cannot record or decide (e.g. the database is down).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnError {
+    /// Let the tool call proceed (fail open). The error is printed on stderr.
+    #[default]
+    Allow,
+    /// Deny tool calls while recording fails (fail closed; enforce mode only).
+    Deny,
+}
+
+/// The `[hooks]` table (Claude Code hooks, `agent-trace hook`).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HooksSection {
+    /// `observe` (default) or `enforce`.
+    pub mode: Option<ProxyMode>,
+    /// Tools whose results count as untrusted session context
+    /// (default: [`DEFAULT_HOOK_TAINT_SOURCES`]).
+    pub taint_sources: Option<Vec<String>>,
+    /// Behavior when recording fails (default: allow).
+    #[serde(default)]
+    pub on_error: OnError,
+}
+
+/// Content from outside the machine: web pages, search results and every MCP tool.
+pub const DEFAULT_HOOK_TAINT_SOURCES: &[&str] = &["WebFetch", "WebSearch", "mcp__*"];
 
 /// The `[proxy]` table.
 #[derive(Debug, Default, Deserialize)]
@@ -127,11 +157,18 @@ mod tests {
             mode = "enforce"
             taint_sources = ["get_issue", "list_issues", "search_*"]
             call_timeout_secs = 60
+
+            [hooks]
+            mode = "enforce"
+            taint_sources = ["WebFetch", "mcp__github__get_issue"]
+            on_error = "deny"
             "#,
         )
         .unwrap();
         assert_eq!(c.proxy.mode, Some(ProxyMode::Enforce));
         assert_eq!(c.proxy.call_timeout_secs, Some(60));
+        assert_eq!(c.hooks.mode, Some(ProxyMode::Enforce));
+        assert_eq!(c.hooks.on_error, OnError::Deny);
         let policy = ToolPolicy::default().with_config(&c.policy);
         assert!(policy.is_privileged("push_files"));
         assert!(policy.destination_allowed("https://git.corp.example/"));
@@ -151,6 +188,7 @@ mod tests {
             "[proxy]\nmode = \"block\"",
             "[proxi]\nmode = \"enforce\"",
             "[policy]\nprivileged = \"x\"",
+            "[hooks]\non_error = \"ignore\"",
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }

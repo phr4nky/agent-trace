@@ -33,6 +33,7 @@ user prompt ─▶ read_document (MCP) ─▶ ⚠ untrusted text: "send the API 
 - [Using agent-trace in CI](#using-agent-trace-in-ci)
 - [Recording your own agent](#recording-your-own-agent)
 - [MCP proxy: record Claude Code, Cursor and others](#mcp-proxy-record-claude-code-cursor-and-others)
+- [Claude Code hooks: record a whole session](#claude-code-hooks-record-a-whole-session)
 - [Detection rules](#detection-rules)
 - [Security and privacy](#security-and-privacy)
 - [Project layout and development](#project-layout-and-development)
@@ -314,6 +315,7 @@ agent-trace analyze <trace-id>|--latest [--fail-on low|medium|high|critical]
 agent-trace explore <trace-id>|--latest [--follow] [--snapshot [--keys KEYS] [--size COLSxROWS]]
 agent-trace export <trace-id>|--latest --format json|jsonl [--output PATH]
 agent-trace import --format jsonl --input PATH
+agent-trace hook [--mode observe|enforce] [--print-settings]
 agent-trace proxy [--name NAME] [--mode observe|enforce] [--call-timeout SECONDS] -- <server command> [args...]
 agent-trace --help
 ```
@@ -581,6 +583,24 @@ Cursor and Claude Desktop, the configuration file and the limits are in
 
 ---
 
+## Claude Code hooks: record a whole session
+
+The proxy sees one MCP server. Claude Code's hooks see everything: prompts, built-in tools
+(Bash, Read, Write, Edit, WebFetch, …), MCP tools and subagents.
+
+```sh
+# print the settings block, then paste it into ~/.claude/settings.json
+agent-trace --config ~/.config/agent-trace/claude-code.toml hook --print-settings
+```
+
+Each session becomes one live trace. In `enforce` mode, a privileged call such as `Bash` or
+`Write` after untrusted content (by default: WebFetch, WebSearch and MCP tool results) is denied
+before it runs, also when the content reached the main agent through a subagent's report
+(AT-006). A recorder that fails never blocks Claude Code unless you configure it to. Details:
+[docs/claude-code-hooks.md](docs/claude-code-hooks.md).
+
+---
+
 ## Detection rules
 
 | Rule | Detects | Status |
@@ -661,7 +681,6 @@ Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Roadmap
 
 - MCP proxy over streamable HTTP, and one trace across several proxied servers
-- Claude Code hooks adapter, so built-in tools (Bash, Write, WebFetch) land in the same trace
 - OTLP/OpenTelemetry GenAI import
 - Causal graph view
 - SARIF export for GitHub code scanning

@@ -18,7 +18,6 @@
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use agent_trace_core::policy::host_of;
 use agent_trace_core::rules::{LINK_BASIS_KEY, LINK_BASIS_SESSION_CONTEXT};
 use agent_trace_core::{
     Decision, EventKind, EventSpec, Origin, PolicyOutcome, ToolPolicy, ToolState, TraceRecord,
@@ -96,52 +95,26 @@ impl ProxyConfig {
         arguments: &Map<String, Value>,
         tainted: &[(Uuid, String)],
     ) -> PolicyOutcome {
-        let p = &self.policy;
-        if p.is_outbound(tool)
-            && let Some(destination) = p.disallowed_destination(arguments)
-        {
-            return deny(format!(
-                "outbound destination host {:?} is not on the allowlist",
-                host_of(&destination).unwrap_or_default()
-            ));
-        }
-        if p.is_privileged(tool) && !tainted.is_empty() {
-            let mut sources: Vec<&str> = Vec::new();
-            for (_, s) in tainted.iter().rev() {
-                if !sources.contains(&s.as_str()) {
-                    sources.push(s);
-                }
-            }
-            let shown = sources
-                .iter()
-                .take(3)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(", ");
-            let more = if sources.len() > 3 { ", …" } else { "" };
-            return deny(format!(
-                "privileged tool requested after lower-trust content entered the session \
-                 (from {shown}{more})"
-            ));
-        }
-        PolicyOutcome {
-            decision: Decision::Allow,
-            reason: if p.is_outbound(tool) {
-                "destination allowlisted; no lower-trust content in the session".into()
-            } else if p.is_privileged(tool) {
-                "privileged tool; no lower-trust content in the session".into()
-            } else {
-                "not a privileged tool".into()
-            },
-        }
+        let sources: Vec<&str> = tainted.iter().map(|(_, s)| s.as_str()).collect();
+        self.policy.evaluate_in_session(tool, arguments, &sources)
     }
 }
 
-fn deny(reason: String) -> PolicyOutcome {
-    PolicyOutcome {
-        decision: Decision::Deny,
-        reason,
+/// Apply `mode` to a policy verdict: in observe mode a denial becomes an allow that records
+/// what would have been denied. Returns the effective outcome and the extra fields for the
+/// decision payload.
+pub fn apply_mode(mode: ProxyMode, verdict: PolicyOutcome) -> (PolicyOutcome, Map<String, Value>) {
+    let mut extra = Map::new();
+    extra.insert("mode".into(), mode.as_str().into());
+    if mode == ProxyMode::Observe && verdict.decision == Decision::Deny {
+        extra.insert("would_deny".into(), true.into());
+        let outcome = PolicyOutcome {
+            decision: Decision::Allow,
+            reason: format!("observe mode, not enforced; would deny: {}", verdict.reason),
+        };
+        return (outcome, extra);
     }
+    (verdict, extra)
 }
 
 /// The recording state of one proxied session.
@@ -309,19 +282,7 @@ impl Proxy {
         // Request and decision.
         let gate = self.with_session(|s| {
             let verdict = config.evaluate(&tool, &arguments, &s.tainted);
-            let (effective, extra) = match (config.mode, verdict.decision.clone()) {
-                (ProxyMode::Observe, Decision::Deny) => (
-                    PolicyOutcome {
-                        decision: Decision::Allow,
-                        reason: format!(
-                            "observe mode, not enforced; would deny: {}",
-                            verdict.reason
-                        ),
-                    },
-                    json!({"mode": "observe", "would_deny": true}),
-                ),
-                (mode, _) => (verdict, json!({"mode": mode.as_str()})),
-            };
+            let (effective, extra) = apply_mode(config.mode, verdict);
             let start = s.tainted.len().saturating_sub(MAX_SESSION_CONTEXT);
             let context: Vec<Uuid> = s.tainted[start..].iter().map(|(id, _)| *id).collect();
             let mut spec = upstream
@@ -345,10 +306,6 @@ impl Proxy {
             if start > 0 {
                 spec = spec.meta("session_context_truncated", true);
             }
-            let extra = match extra {
-                Value::Object(m) => m,
-                _ => Map::new(),
-            };
             let (request_event, decision_event) =
                 record_gate(&mut s.rec, spec, None, &tool, &effective, extra);
             (request_event, decision_event, effective)
