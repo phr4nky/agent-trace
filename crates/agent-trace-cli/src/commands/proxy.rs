@@ -48,6 +48,8 @@ pub enum SessionKey {
     /// `--session` or `$AGENT_TRACE_SESSION`.
     Explicit(String),
     /// The MCP client process: its PID plus its start time (PIDs are reused).
+    /// Only detected on Unix (see [`parent_session`]).
+    #[cfg_attr(not(unix), allow(dead_code))]
     Parent { pid: u32, started: String },
 }
 
