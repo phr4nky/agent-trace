@@ -8,6 +8,18 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- `agent-trace sarif FILE... [--output PATH] [--fail-on SEVERITY]`: convert JSONL trace files into
+  one SARIF 2.1.0 file for GitHub Code Scanning (`github/codeql-action/upload-sarif`). Each finding
+  is a result located at the line of its key event (the tool request) in the trace file, with the
+  evidence path as a code flow and the evidence steps as related locations. Levels and
+  `security-severity` follow the finding severity; fingerprints do not depend on trace or event
+  IDs, so re-recorded behavior updates the same alert. Files are validated and re-redacted like
+  `import`; nothing is stored.
+- `export --format sarif [--artifact-uri URI]` for a stored trace.
+- `Rule::description` and `Rule::default_severity` (with defaults) for rule metadata.
+
 ## [1.4.0] - 2026-11-17
 
 Record whole Claude Code sessions, follow an attack across several MCP servers, look at it as a

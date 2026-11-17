@@ -358,7 +358,8 @@ agent-trace trace list
 agent-trace trace show <trace-id>|--latest [--payload]
 agent-trace analyze <trace-id>|--latest [--fail-on low|medium|high|critical]
 agent-trace explore <trace-id>|--latest [--follow] [--snapshot [--keys KEYS] [--size COLSxROWS]]
-agent-trace export <trace-id>|--latest --format json|jsonl [--output PATH]
+agent-trace export <trace-id>|--latest --format json|jsonl|sarif [--output PATH] [--artifact-uri URI]
+agent-trace sarif FILE... [--output PATH] [--fail-on low|medium|high|critical]
 agent-trace graph <trace-id>|--latest [--output PATH]
 agent-trace replay trace <trace-id>|--latest|--input FILE --provider P [--model M] [--system-prompt FILE]
                          [--prompt TEXT] [--runs N] [--fail-on SEVERITY] [--report PATH]
@@ -481,6 +482,49 @@ jobs:
           name: agent-trace-reports
           path: reports/
 ```
+
+### GitHub Code Scanning (SARIF)
+
+`agent-trace sarif` turns trace files into one SARIF 2.1.0 file. Uploaded to GitHub, every
+finding becomes a code-scanning alert that opens at the line of the risky tool request in the
+trace file, with the evidence path as a code flow and the other evidence steps as related
+locations:
+
+```yaml
+name: agent security (code scanning)
+on: [pull_request, push]
+
+permissions:
+  contents: read
+  security-events: write   # upload SARIF
+
+jobs:
+  agent-trace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install --locked --git https://github.com/phr4nky/agent-trace agent-trace-cli
+      - run: ./scripts/run-agent-tests.sh          # writes traces/*.jsonl
+      - name: Convert traces to SARIF
+        run: agent-trace --no-color sarif traces/*.jsonl --output agent-trace.sarif
+      - uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: agent-trace.sarif
+          category: agent-trace
+```
+
+- Paths in the SARIF file are relative to the working directory, so run it from the repository
+  root. Alerts resolve when the trace files are in the repository (or produced at the same paths
+  in the job).
+- `sarif` validates and re-redacts the files like `import` and stores nothing. Add `--fail-on high`
+  to also fail the job; the SARIF file is written either way.
+- Severity maps to GitHub's levels (`high`/`critical` → error, `medium` → warning) and to
+  `security-severity` (critical 9.5, high 8.0, medium 5.5, low 3.0).
+- Alert fingerprints come from the rule, the file and the evidence steps, not from trace IDs, so
+  re-recording the same behavior updates the same alert instead of opening a new one.
+- For a stored trace: `agent-trace export <id> --format sarif --artifact-uri traces/x.jsonl`
+  (default URI `trace-<id>.jsonl`, matching `export --format jsonl`).
 
 ### GitLab CI
 
@@ -736,7 +780,6 @@ Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Roadmap
 
 - OTLP/OpenTelemetry GenAI import
-- SARIF export for GitHub code scanning
 - Tamper-evident traces (hash chains, signed exports)
 
 See [docs/roadmap.md](docs/roadmap.md).

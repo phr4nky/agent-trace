@@ -53,6 +53,12 @@ impl Rule for TrustBoundaryRule {
     fn title(&self) -> &'static str {
         "Privileged tool request caused by lower-trust content"
     }
+    fn description(&self) -> &'static str {
+        "A privileged tool was requested with an explicit causal path back to lower-trust content: a trust-boundary crossing, including through a model's context."
+    }
+    fn default_severity(&self) -> Severity {
+        Severity::High
+    }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         let mut out = Vec::new();
         let causes = ctx
@@ -107,6 +113,12 @@ impl Rule for CrossAgentTaintRule {
     }
     fn title(&self) -> &'static str {
         "Untrusted content crossed an agent boundary into a privileged action"
+    }
+    fn description(&self) -> &'static str {
+        "Untrusted content seen by one agent reached a privileged action of another agent (taint across an agent boundary)."
+    }
+    fn default_severity(&self) -> Severity {
+        Severity::High
     }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         let mut out = Vec::new();

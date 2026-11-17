@@ -1,6 +1,11 @@
 # Roadmap
 
-## v1.4.0 (this release)
+## Unreleased
+
+- `agent-trace sarif FILE...` and `export --format sarif`: SARIF 2.1.0 for GitHub Code Scanning,
+  alerts at the line of the risky tool request in the trace file, evidence as a code flow
+
+## v1.4.0
 
 - `agent-trace replay`: run a model or system prompt against a recorded session (task and tool
   results from the recording, nothing executed) and compare the findings; regression suites in
@@ -53,6 +58,5 @@
 ## Next
 
 - OTLP ingestion with a versioned GenAI semantic-convention mapping
-- SARIF export and GitHub Code Scanning integration
 - Tamper evidence (hash-chained events, signed exports)
 - Retention and redaction configuration, rule/plugin SDK

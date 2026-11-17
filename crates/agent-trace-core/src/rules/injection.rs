@@ -171,6 +171,12 @@ impl Rule for PromptInjectionRule {
     fn title(&self) -> &'static str {
         "Potential prompt injection in lower-trust content"
     }
+    fn description(&self) -> &'static str {
+        "Untrusted content (a tool result, document, web page or another agent's message) contains instructions that try to change the agent's behavior: override its task, call a tool, send data somewhere or hide something from the user."
+    }
+    fn default_severity(&self) -> Severity {
+        Severity::Medium
+    }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         content_events(ctx)
             .filter_map(|event| {
@@ -222,6 +228,12 @@ impl Rule for AuthoritySpoofingRule {
     }
     fn title(&self) -> &'static str {
         "Lower-trust content claims system-level authority"
+    }
+    fn description(&self) -> &'static str {
+        "Untrusted content impersonates system or developer authority, e.g. role headers, `<system>` tags or claims to be the operator."
+    }
+    fn default_severity(&self) -> Severity {
+        Severity::Medium
     }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         content_events(ctx)
