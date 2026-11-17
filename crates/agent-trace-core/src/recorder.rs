@@ -100,6 +100,57 @@ impl EventSpec {
     }
 }
 
+/// Error of a [`TraceAccess`] backend (e.g. the database or a lock failed).
+pub type AccessError = Box<dyn std::error::Error + Send + Sync>;
+
+/// Exclusive access to the recorder of a trace that may be shared: by several MCP proxies
+/// of one client session, or by one process per Claude Code hook event. An implementation
+/// persists what `f` records before it returns, so the next caller (in any process) sees it.
+pub trait TraceAccess: Send + Sync {
+    /// The trace this handle writes to.
+    fn trace_id(&self) -> Uuid;
+    /// Run `f` with the trace's recorder (resumed with every stored event) while holding the
+    /// trace's lock, then persist the new events and the header.
+    fn with_recorder(&self, f: &mut dyn FnMut(&mut TraceRecorder)) -> Result<(), AccessError>;
+}
+
+/// [`TraceAccess`] for a trace that lives in this process only (tests, embedders).
+#[derive(Debug)]
+pub struct MemoryTrace {
+    rec: std::sync::Mutex<TraceRecorder>,
+}
+
+impl MemoryTrace {
+    pub fn new(rec: TraceRecorder) -> Self {
+        Self {
+            rec: std::sync::Mutex::new(rec),
+        }
+    }
+
+    /// The trace as recorded so far.
+    pub fn snapshot(&self) -> TraceRecord {
+        let rec = self.rec.lock().unwrap_or_else(|p| p.into_inner());
+        TraceRecord {
+            trace: rec.trace().clone(),
+            events: rec.events().to_vec(),
+        }
+    }
+}
+
+impl TraceAccess for MemoryTrace {
+    fn trace_id(&self) -> Uuid {
+        self.rec
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .trace_id()
+    }
+
+    fn with_recorder(&self, f: &mut dyn FnMut(&mut TraceRecorder)) -> Result<(), AccessError> {
+        f(&mut self.rec.lock().unwrap_or_else(|p| p.into_inner()));
+        Ok(())
+    }
+}
+
 /// Notifications delivered to a recorder sink.
 #[derive(Debug, Clone, Copy)]
 pub enum RecorderEvent<'a> {

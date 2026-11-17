@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use agent_trace_core::{
-    Analyzer, AttemptStatus, Confidence, EventKind, ExecutionMode, Finding, PolicyConfig,
-    ToolPolicy, TraceRecord, TraceRecorder, TrustLevel,
+    Analyzer, AttemptStatus, Confidence, EventKind, ExecutionMode, Finding, MemoryTrace,
+    PolicyConfig, ToolPolicy, TraceRecord, TraceRecorder, TraceStatus, TrustLevel,
 };
 use agent_trace_mcp::{McpSession, Proxy, ProxyConfig, ProxyMode};
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -115,11 +115,29 @@ fn policy() -> ToolPolicy {
 
 struct Harness {
     proxy: Proxy,
+    trace: Arc<MemoryTrace>,
     client: RunningService<RoleClient, ()>,
     pull_requests: Arc<AtomicUsize>,
 }
 
+fn new_trace() -> Arc<MemoryTrace> {
+    Arc::new(MemoryTrace::new(TraceRecorder::new(
+        "proxy/github",
+        ExecutionMode::Live,
+    )))
+}
+
 async fn start(mode: ProxyMode, taint_sources: &[&str]) -> Harness {
+    start_on(new_trace(), "github", mode, taint_sources).await
+}
+
+/// A proxy named `name` in front of its own fake GitHub server, recording into `trace`.
+async fn start_on(
+    trace: Arc<MemoryTrace>,
+    name: &str,
+    mode: ProxyMode,
+    taint_sources: &[&str],
+) -> Harness {
     let pull_requests = Arc::new(AtomicUsize::new(0));
     let upstream = McpSession::connect_in_process(FakeGithub::new(pull_requests.clone()))
         .await
@@ -128,13 +146,9 @@ async fn start(mode: ProxyMode, taint_sources: &[&str]) -> Harness {
         mode,
         policy: policy(),
         taint_sources: taint_sources.iter().map(|s| s.to_string()).collect(),
-        ..ProxyConfig::new("github")
+        ..ProxyConfig::new(name)
     };
-    let proxy = Proxy::new(
-        upstream,
-        TraceRecorder::new("proxy/github", ExecutionMode::Live),
-        config,
-    );
+    let proxy = Proxy::new(upstream, trace.clone(), config).unwrap();
     let (client_io, server_io) = tokio::io::duplex(256 * 1024);
     let server = proxy.clone();
     tokio::spawn(async move {
@@ -145,6 +159,7 @@ async fn start(mode: ProxyMode, taint_sources: &[&str]) -> Harness {
     let client = ().serve(client_io).await.unwrap();
     Harness {
         proxy,
+        trace,
         client,
         pull_requests,
     }
@@ -179,7 +194,8 @@ impl Harness {
 
     async fn finish(self) -> (TraceRecord, Vec<Finding>, usize) {
         let _ = self.client.cancel().await;
-        let record = self.proxy.finish("client_disconnected").unwrap();
+        self.proxy.finish("client_disconnected").unwrap();
+        let record = self.trace.snapshot();
         let findings = Analyzer::new(policy()).analyze(&record, record.trace.created_at);
         (record, findings, self.pull_requests.load(Ordering::SeqCst))
     }
@@ -225,7 +241,14 @@ async fn enforce_mode_blocks_the_pull_request_after_reading_the_issue() {
     assert_eq!(request.caused_by_event_id, None);
     assert_eq!(request.context_event_ids.len(), 2);
     assert_eq!(request.metadata["link_basis"], "session_context");
-    assert_eq!(record.trace.metadata["proxy_mode"], "enforce");
+    // Proxies sharing a trace may differ, so the mode is recorded per connection.
+    let connected = record
+        .events
+        .iter()
+        .find(|e| e.name == "mcp-server-connected")
+        .unwrap();
+    assert_eq!(connected.payload["mode"], "enforce");
+    assert_eq!(connected.payload["proxy"], "github");
     assert_eq!(record.trace.metadata["ended_by"], "client_disconnected");
     assert_eq!(record.trace.metadata["mcp_client"], "rmcp");
 }
@@ -320,4 +343,83 @@ async fn upstream_errors_reach_the_client_and_the_trace() {
     assert!(kinds.contains(&EventKind::ToolCallFailed), "{kinds:?}");
     // Every lifecycle link points at a recorded event.
     agent_trace_core::validate(&record).unwrap();
+}
+
+/// Two proxies of one client session (two MCP servers) share one trace: the issue arrives
+/// through server A, the pull request goes out through server B, and B's call is blocked
+/// because of A's content.
+#[tokio::test]
+async fn content_from_one_server_taints_calls_to_another() {
+    let trace = new_trace();
+    let a = start_on(trace.clone(), "issues", ProxyMode::Enforce, &["get_issue"]).await;
+    let b = start_on(trace.clone(), "repos", ProxyMode::Enforce, &["get_issue"]).await;
+    // Before any untrusted content, B may write.
+    let ok = b
+        .call(
+            "create_pull_request",
+            json!({"repo": "victim/private-repo", "title": "t", "body": "b"}),
+        )
+        .await;
+    assert_ne!(ok.is_error, Some(true));
+    a.call(
+        "get_issue",
+        json!({"repo": "victim/public-repo", "number": 1}),
+    )
+    .await;
+    let blocked = b
+        .call(
+            "create_pull_request",
+            json!({"repo": "victim/public-repo", "title": "About the author", "body": "x"}),
+        )
+        .await;
+    assert_eq!(blocked.is_error, Some(true));
+    let text: String = blocked
+        .content
+        .iter()
+        .filter_map(|c| c.as_text().map(|t| t.text.clone()))
+        .collect();
+    assert!(text.contains("issues:get_issue"), "{text}");
+
+    // The trace stays running until the last proxy disconnects.
+    let (b_record, _, b_pull_requests) = b.finish().await;
+    assert_eq!(b_record.trace.status, TraceStatus::Running);
+    assert_eq!(
+        b_pull_requests, 1,
+        "only the first pull request reached server B"
+    );
+    let (record, findings, _) = a.finish().await;
+    assert_eq!(record.trace.status, TraceStatus::Completed);
+    agent_trace_core::validate(&record).unwrap();
+
+    let at002 = findings
+        .iter()
+        .find(|f| f.rule_id == "AT-002")
+        .expect("AT-002 across servers");
+    assert_eq!(at002.attempt_status, AttemptStatus::Blocked);
+    let proxy_of = |id: &uuid::Uuid| {
+        record
+            .events
+            .iter()
+            .find(|e| e.event_id == *id)
+            .and_then(|e| e.metadata.get("mcp_server").cloned())
+    };
+    // Evidence: the issue result recorded by A and the request recorded by B.
+    let servers: Vec<_> = at002
+        .evidence_event_ids
+        .iter()
+        .filter_map(proxy_of)
+        .collect();
+    assert!(servers.len() >= 2, "{servers:?}");
+    let connections = record
+        .events
+        .iter()
+        .filter(|e| e.name == "mcp-server-connected")
+        .count();
+    assert_eq!(connections, 2);
+    let starts = record
+        .events
+        .iter()
+        .filter(|e| e.kind == EventKind::AgentStarted)
+        .count();
+    assert_eq!(starts, 1, "one client, one agent");
 }

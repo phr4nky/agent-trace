@@ -111,6 +111,13 @@ impl McpSession {
         Ok(Self::from_client(client, "in-process"))
     }
 
+    /// Wrap a client connection made over another transport (e.g. streamable HTTP, which this
+    /// crate deliberately cannot open itself; see `agent-trace-net`). `transport` names it in
+    /// the recorded metadata.
+    pub fn from_service(client: RunningService<RoleClient, ()>, transport: &'static str) -> Self {
+        Self::from_client(client, transport)
+    }
+
     fn from_client(client: RunningService<RoleClient, ()>, transport: &'static str) -> Self {
         let info = client.peer_info();
         let (server_name, server_version, protocol_version) = match &info {
@@ -251,6 +258,7 @@ impl McpSession {
             executed_event,
             tool,
             response.as_ref().map_err(String::as_str),
+            Map::new(),
         ))
     }
 
@@ -288,6 +296,7 @@ impl McpSession {
         executed_event: Uuid,
         tool: &str,
         response: Result<&CallToolResult, &str>,
+        result_meta: Map<String, Value>,
     ) -> CallOutcome {
         let (is_error, text, structured, transport_error) = match response {
             Ok(result) => {
@@ -310,20 +319,22 @@ impl McpSession {
         if let Some(err) = transport_error {
             payload["transport_error"] = Value::String(err.to_owned());
         }
-        let result_event = recorder.record(
-            self.mcp_metadata(
-                EventSpec::new(
-                    EventKind::ToolResultReceived,
-                    Origin::McpTool,
-                    TrustLevel::LowerTrust,
-                    tool,
-                )
-                .payload(payload)
-                .parent(spec.request_event)
-                .agent(spec.agent.clone())
-                .caused_by(executed_event),
-            ),
+        let mut result = self.mcp_metadata(
+            EventSpec::new(
+                EventKind::ToolResultReceived,
+                Origin::McpTool,
+                TrustLevel::LowerTrust,
+                tool,
+            )
+            .payload(payload)
+            .parent(spec.request_event)
+            .agent(spec.agent.clone())
+            .caused_by(executed_event),
         );
+        for (key, value) in result_meta {
+            result = result.meta(&key, value);
+        }
+        let result_event = recorder.record(result);
         let (kind, state) = if is_error {
             (EventKind::ToolCallFailed, ToolState::Failed)
         } else {

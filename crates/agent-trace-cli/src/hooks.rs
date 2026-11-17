@@ -11,7 +11,7 @@
 //! report to the main agent is lower-trust when they saw untrusted content (as in the lab), so
 //! a privileged call that follows is reported by AT-006 as cross-agent taint.
 
-use agent_trace_core::rules::{LINK_BASIS_KEY, LINK_BASIS_SESSION_CONTEXT};
+use agent_trace_core::rules::{LINK_BASIS_KEY, LINK_BASIS_SESSION_CONTEXT, TAINT_SOURCE_KEY};
 use agent_trace_core::{
     Decision, Event, EventKind, EventSpec, ExecutionMode, Origin, ToolPolicy, ToolState,
     TraceRecorder, TraceStatus, TrustLevel, glob_match,
@@ -23,9 +23,6 @@ use uuid::Uuid;
 
 /// Namespace of the trace IDs derived from Claude Code session IDs.
 const SESSION_NAMESPACE: Uuid = Uuid::from_u128(0x6a1f_3c2e_9b7d_4e15_a0c8_52d4_1e9f_7b33);
-/// Metadata key marking content that counts as untrusted session context; the value is the
-/// source label (tool name or `subagent:<type>`).
-pub const TAINT_SOURCE_KEY: &str = "taint_source";
 /// Metadata key holding Claude Code's `tool_use_id` on tool events.
 pub const TOOL_USE_ID_KEY: &str = "tool_use_id";
 /// At most this many earlier untrusted events are linked to one request (newest kept).

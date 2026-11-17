@@ -316,7 +316,8 @@ agent-trace explore <trace-id>|--latest [--follow] [--snapshot [--keys KEYS] [--
 agent-trace export <trace-id>|--latest --format json|jsonl [--output PATH]
 agent-trace import --format jsonl --input PATH
 agent-trace hook [--mode observe|enforce] [--print-settings]
-agent-trace proxy [--name NAME] [--mode observe|enforce] [--call-timeout SECONDS] -- <server command> [args...]
+agent-trace proxy [--name NAME] [--mode observe|enforce] [--session KEY | --no-session]
+                  ( --url URL [--bearer-token-env VAR] | -- <server command> [args...] )
 agent-trace --help
 ```
 
@@ -576,6 +577,11 @@ injection of May 2025 needed: an issue in a public repository got an agent to pu
 repository content in a public pull request. (The tests replay this sequence against a
 simulated GitHub server, not the real one.)
 
+Remote servers work too: `--url https://…` with the token taken from an environment variable
+(`--bearer-token-env`). All proxies one client starts write into **one trace**, so an
+injection that arrives through one server and a privileged call to another server are linked,
+and the call is blocked.
+
 The proxy sees tool traffic, not the model's context, so it links earlier untrusted content as
 *session context* and reports such findings with medium confidence. Setup for Claude Code,
 Cursor and Claude Desktop, the configuration file and the limits are in
@@ -680,7 +686,6 @@ Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-- MCP proxy over streamable HTTP, and one trace across several proxied servers
 - OTLP/OpenTelemetry GenAI import
 - Causal graph view
 - SARIF export for GitHub code scanning

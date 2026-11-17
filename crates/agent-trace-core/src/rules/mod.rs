@@ -17,7 +17,8 @@ pub use injection::{
     AuthoritySpoofingRule, CONTENT_INDICATORS_KEY, PromptInjectionRule, record_content_indicators,
 };
 pub use trust_boundary::{
-    CrossAgentTaintRule, LINK_BASIS_KEY, LINK_BASIS_SESSION_CONTEXT, TrustBoundaryRule,
+    CrossAgentTaintRule, LINK_BASIS_KEY, LINK_BASIS_SESSION_CONTEXT, TAINT_SOURCE_KEY,
+    TrustBoundaryRule,
 };
 
 /// Input for rule evaluation.
