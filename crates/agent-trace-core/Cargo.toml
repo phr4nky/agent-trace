@@ -17,5 +17,8 @@ time.workspace = true
 url.workspace = true
 uuid.workspace = true
 
+[dev-dependencies]
+toml.workspace = true
+
 [lints]
 workspace = true

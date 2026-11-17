@@ -14,6 +14,11 @@ The section of a version is used as the release notes of its GitHub release.
   rejects such files as an unknown record type; remove the last line to import them there.
 - `import` rejects an exported file that was changed after export. Files without an integrity
   record (hand-written traces) are accepted as before.
+- An `agent-trace.toml` that cannot be loaded (unknown keys, invalid pattern or rule), or a
+  `--config` / `AGENT_TRACE_CONFIG` file that does not exist, is now an error for every command,
+  because configured redaction must not be skipped silently.
+- `Rule::id` and `Rule::title` return `&str` instead of `&'static str` (as does the new
+  `Rule::description`). Implementations that return string literals compile unchanged.
 
 ### Added
 
@@ -25,7 +30,8 @@ The section of a version is used as the release notes of its GitHub release.
   IDs, so re-recorded behavior updates the same alert. Files are validated and re-redacted like
   `import`; nothing is stored.
 - `export --format sarif [--artifact-uri URI]` for a stored trace.
-- `Rule::description` and `Rule::default_severity` (with defaults) for rule metadata.
+- `Rule::description` and `Rule::default_severity` (with defaults) for rule metadata; custom rules
+  report their configured description and severity.
 - Tamper evidence for exports: every JSONL export ends with an integrity record, a SHA-256 hash
   chain over all other lines with checkpoints. `import` and the new `agent-trace verify FILE`
   reject a file that was changed, shortened, reordered or extended after export.
@@ -35,6 +41,18 @@ The section of a version is used as the release notes of its GitHub release.
   key); `--require-signature` rejects unsigned files.
 - Library: `agent_trace_storage::{integrity, write_jsonl_signed, SigningKey}`;
   `Imported::integrity`.
+- `agent-trace prune [--older-than AGE] [--keep N] [--dry-run]` and `[retention]`
+  (`max_age_days`, `max_traces`): delete old traces with their events, findings and evidence
+  links; traces still being recorded are kept. On SQLite, deleted content is overwritten
+  (`secure_delete`) and the write-ahead log truncated. `Store::delete_trace`, `Store::compact`.
+- `[redaction]`: additional secret patterns (with an optional `value` capture group) and field
+  names, applied to everything the process stores, exports, logs and prints.
+  `agent_trace_core::redact::{RedactionConfig, configure}`.
+- Declarative rules (`[[rules]]`): tool-call rules (tool globs, argument regexes, optional
+  `after_untrusted` provenance like AT-002, attempt status from the recorded lifecycle) and
+  content rules (regex on lower-trust content). They run wherever traces are analyzed.
+  `Analyzer::with_rule` and `agent_trace_core::rules::CustomRule` for Rust users.
+- `docs/configuration.md` (the whole `agent-trace.toml`) and `docs/rules.md` (writing rules).
 
 ## [1.4.0] - 2026-11-17
 

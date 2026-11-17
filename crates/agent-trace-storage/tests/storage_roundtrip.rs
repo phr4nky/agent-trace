@@ -430,3 +430,39 @@ fn signed_exports_name_their_key() {
     assert_eq!(key_id, key.key_id());
     assert_eq!(public, key.public_key());
 }
+
+/// Deleted traces do not linger on disk: SQLite overwrites freed pages (`secure_delete`) and
+/// the write-ahead log is truncated.
+#[test]
+fn deleted_traces_leave_no_content_in_sqlite_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db.sqlite3");
+    let marker = "PRUNED-CONTENT-MARKER-7f3a9c";
+    let mut store = Store::open(&path).unwrap();
+    let mut rec = TraceRecorder::new("to-delete", ExecutionMode::Live);
+    rec.record(
+        EventSpec::new(
+            EventKind::ToolResultReceived,
+            Origin::McpTool,
+            TrustLevel::LowerTrust,
+            "read_document",
+        )
+        .payload(serde_json::json!({ "content": marker.repeat(50) })),
+    );
+    let rec = rec.finish();
+    store.insert_trace(&rec, TraceSource::Recorded).unwrap();
+    let contains = |dir: &std::path::Path| {
+        std::fs::read_dir(dir).unwrap().any(|e| {
+            let bytes = std::fs::read(e.unwrap().path()).unwrap_or_default();
+            bytes.windows(marker.len()).any(|w| w == marker.as_bytes())
+        })
+    };
+    assert!(contains(dir.path()), "the marker is stored first");
+    assert!(store.delete_trace(rec.trace.trace_id).unwrap());
+    store.compact().unwrap();
+    drop(store);
+    assert!(
+        !contains(dir.path()),
+        "deleted content is not left in the database or its log"
+    );
+}

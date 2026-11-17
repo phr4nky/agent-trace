@@ -163,6 +163,19 @@ enum Command {
         #[arg(long, value_enum)]
         fail_on: Option<Threshold>,
     },
+    /// Delete old traces (retention). Defaults come from [retention] in agent-trace.toml;
+    /// traces still being recorded are kept.
+    Prune {
+        /// Delete traces older than this: 30d, 12h, 90m (a plain number means days).
+        #[arg(long, value_name = "AGE")]
+        older_than: Option<String>,
+        /// Keep only the newest N traces.
+        #[arg(long, value_name = "N")]
+        keep: Option<usize>,
+        /// Only list what would be deleted.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Import a trace from JSONL (validated and re-redacted; findings are recomputed).
     Import {
         #[arg(long, value_enum, default_value = "jsonl")]
@@ -457,7 +470,24 @@ fn main() -> ExitCode {
         config: cli.config.clone(),
         style: output::Style::new(color),
     };
+    // Configured redaction applies to everything this process stores, exports and prints,
+    // so a configuration that cannot be loaded stops every command instead of being skipped.
+    let installed = ctx.config().and_then(|loaded| {
+        agent_trace_core::redact::configure(&loaded.config.redaction).map_err(anyhow::Error::msg)
+    });
+    if let Err(e) = installed {
+        eprintln!(
+            "error: {}",
+            output::term_safe(&agent_trace_core::Redactor::new().scrub(&format!("{e:#}")))
+        );
+        return ExitCode::from(EXIT_ERROR);
+    }
     let result = match cli.command {
+        Command::Prune {
+            older_than,
+            keep,
+            dry_run,
+        } => commands::prune::run(&ctx, older_than.as_deref(), keep, dry_run),
         Command::LabServer { documents } => commands::lab_server(&documents).map(|_| EXIT_OK),
         Command::Hook {
             mode,

@@ -1,5 +1,6 @@
 //! Deterministic, typed security rules. Findings are forensic indicators.
 
+pub mod custom;
 mod exfiltration;
 mod injection;
 mod trust_boundary;
@@ -12,6 +13,7 @@ use crate::finding::{AttemptStatus, Confidence, Finding, Severity};
 use crate::policy::ToolPolicy;
 use crate::provenance::TraceIndex;
 
+pub use custom::{CustomRule, CustomRuleConfig, RuleTarget};
 pub use exfiltration::{BlockedActionRule, ExfiltrationRule};
 pub use injection::{
     AuthoritySpoofingRule, CONTENT_INDICATORS_KEY, PromptInjectionRule, record_content_indicators,
@@ -31,11 +33,11 @@ pub struct RuleContext<'a> {
 
 /// A single security rule.
 pub trait Rule: Send + Sync {
-    fn id(&self) -> &'static str;
+    fn id(&self) -> &str;
     fn version(&self) -> u32;
-    fn title(&self) -> &'static str;
+    fn title(&self) -> &str;
     /// What the rule detects, for reports and SARIF rule metadata.
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         ""
     }
     /// The severity of the rule's typical finding (a finding may be higher).
@@ -70,6 +72,13 @@ impl Analyzer {
             ],
             policy,
         }
+    }
+
+    /// Add a rule (a declarative [`custom::CustomRule`] or your own [`Rule`]) after the
+    /// built-in ones.
+    pub fn with_rule(mut self, rule: Box<dyn Rule>) -> Self {
+        self.rules.push(rule);
+        self
     }
 
     pub fn rules(&self) -> impl Iterator<Item = &dyn Rule> {
