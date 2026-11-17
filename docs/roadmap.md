@@ -8,6 +8,8 @@
   Ed25519 signature; `agent-trace verify` and `import` reject changed files
 - Retention (`agent-trace prune`, `[retention]`), redaction configuration (`[redaction]`), and
   declarative custom rules (`[[rules]]`) plus documented Rust rules
+- OTLP ingestion: `import --format otlp` maps OpenTelemetry GenAI spans (agents, model calls,
+  tool calls, MCP) onto events, with links only from tool call IDs and span structure
 
 ## v1.4.0
 
@@ -61,4 +63,5 @@
 
 ## Next
 
-- OTLP ingestion with a versioned GenAI semantic-convention mapping
+- A local OTLP/HTTP receiver (today: the Collector's file exporter)
+- Mappings for OpenInference and OpenLLMetry span attributes

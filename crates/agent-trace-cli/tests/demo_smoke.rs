@@ -1093,3 +1093,48 @@ fn an_invalid_config_stops_every_command() {
         assert!(String::from_utf8_lossy(&out.stderr).contains("redaction pattern"));
     }
 }
+
+#[test]
+fn otlp_import_maps_genai_spans() {
+    let data = tempfile::tempdir().unwrap();
+    let file = repo().join("examples/otlp/agent-injection.otlp.jsonl");
+    let f = file.to_str().unwrap();
+    let out = bin(
+        data.path(),
+        &[
+            "import",
+            "--format",
+            "otlp",
+            "--input",
+            f,
+            "--fail-on",
+            "high",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(2), "AT-002 / AT-006 are high");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout.matches("imported trace").count(), 3, "{stdout}");
+    assert!(stdout.contains("AT-006"), "{stdout}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("CAPTURE_MESSAGE_CONTENT"));
+    // Importing the same file again stores nothing new.
+    let again = ok(&bin(
+        data.path(),
+        &["import", "--format", "otlp", "--input", f],
+    ));
+    assert_eq!(again.matches("skipped OTel trace").count(), 3, "{again}");
+    let list = ok(&bin(data.path(), &["trace", "list"]));
+    assert_eq!(list.matches("otel/").count(), 3, "{list}");
+    // Not OTLP: rejected.
+    let golden = repo().join("fixtures/golden-traces/benign.jsonl");
+    let out = bin(
+        data.path(),
+        &[
+            "import",
+            "--format",
+            "otlp",
+            "--input",
+            golden.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1));
+}

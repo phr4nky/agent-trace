@@ -35,6 +35,7 @@ user prompt ─▶ read_document (MCP) ─▶ ⚠ untrusted text: "send the API 
 - [Recording your own agent](#recording-your-own-agent)
 - [MCP proxy: record Claude Code, Cursor and others](#mcp-proxy-record-claude-code-cursor-and-others)
 - [Claude Code hooks: record a whole session](#claude-code-hooks-record-a-whole-session)
+- [OpenTelemetry: import GenAI traces](#opentelemetry-import-genai-traces)
 - [Detection rules](#detection-rules)
 - [Security and privacy](#security-and-privacy)
 - [Project layout and development](#project-layout-and-development)
@@ -383,7 +384,7 @@ agent-trace graph <trace-id>|--latest [--output PATH]
 agent-trace replay trace <trace-id>|--latest|--input FILE --provider P [--model M] [--system-prompt FILE]
                          [--prompt TEXT] [--runs N] [--fail-on SEVERITY] [--report PATH]
 agent-trace replay suite FILE --provider P [--model M] [--system-prompt FILE] [--report PATH]
-agent-trace import --format jsonl --input PATH
+agent-trace import --format jsonl|otlp --input PATH [--fail-on SEVERITY]
 agent-trace prune [--older-than AGE] [--keep N] [--dry-run]
 agent-trace hook [--mode observe|enforce] [--print-settings]
 agent-trace proxy [--name NAME] [--mode observe|enforce] [--session KEY | --no-session]
@@ -724,6 +725,23 @@ before it runs, also when the content reached the main agent through a subagent'
 
 ---
 
+## OpenTelemetry: import GenAI traces
+
+Agents already instrumented with OpenTelemetry (GenAI semantic conventions) can be analyzed
+without an adapter. Write the traces to a file with the OpenTelemetry Collector's `file`
+exporter, then:
+
+```bash
+agent-trace import --format otlp --input agent-traces.otlp.jsonl --fail-on high
+```
+
+Agent, model and tool spans become events; tool results are lower-trust content; links come only
+from the data (tool call IDs in the messages, span structure), never from timing. Turn on message
+content capture in your instrumentation, or the causal rules cannot see what led to a tool call.
+Mapping, Collector setup and limits: [docs/otlp.md](docs/otlp.md).
+
+---
+
 ## Detection rules
 
 | Rule | Detects | Status |
@@ -818,7 +836,7 @@ Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-- OTLP/OpenTelemetry GenAI import
+- A local OTLP/HTTP receiver, and mappings for OpenInference and OpenLLMetry attributes
 
 See [docs/roadmap.md](docs/roadmap.md).
 

@@ -53,6 +53,15 @@ The section of a version is used as the release notes of its GitHub release.
   content rules (regex on lower-trust content). They run wherever traces are analyzed.
   `Analyzer::with_rule` and `agent_trace_core::rules::CustomRule` for Rust users.
 - `docs/configuration.md` (the whole `agent-trace.toml`) and `docs/rules.md` (writing rules).
+- `agent-trace import --format otlp`: import OpenTelemetry traces (OTLP/JSON, one request per file
+  or per line as the Collector's `file` exporter writes) and map the GenAI semantic conventions
+  onto events (mapping `otel-genai/1`): agent spans with delegation and reports, model calls with
+  the user prompt, tool calls (including MCP `tools/call`) with lower-trust results. Links come
+  only from the data: tool call IDs in input and output messages, and span structure (a tool that
+  runs an agent gets that agent's report as the cause of its result). Every OTel trace becomes
+  one trace; re-importing skips traces already imported. A note says when no message content was
+  captured. See `docs/otlp.md` and `examples/otlp/agent-injection.otlp.jsonl`.
+- Library: `agent_trace_storage::otlp::read_otlp`.
 
 ## [1.4.0] - 2026-11-17
 

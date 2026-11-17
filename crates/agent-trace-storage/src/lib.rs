@@ -11,6 +11,7 @@ pub mod jsonl;
 pub mod live;
 #[cfg(feature = "mysql")]
 pub mod mysql;
+pub mod otlp;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 pub mod sarif;
