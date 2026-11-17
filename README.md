@@ -17,6 +17,7 @@ user prompt ─▶ read_document (MCP) ─▶ ⚠ untrusted text: "send the API 
 - **Works offline:** the bundled demo needs **no API key, no Docker and no network**. There is no account, no telemetry and no cloud.
 - **Optional real models:** connect **Claude, OpenAI or a local model (Ollama, vLLM, LM Studio)** to see how a real model reacts to the same attacks. The tools stay harmless mocks.
 - **Live view:** watch a trace grow while the agent works, from SQLite or a shared **PostgreSQL / MariaDB / MySQL** database.
+- **Evidence that fits your tools:** findings as alerts in **GitHub Code Scanning (SARIF)**, traces imported from **OpenTelemetry GenAI** instrumentation, and **hash-chained, signed exports** that show when a file was changed.
 
 ---
 
@@ -119,7 +120,7 @@ $ agent-trace demo run
 agent-trace local lab — SIMULATED scenarios (scripted agent, mock tools, no shell, no network)
 
 ▶ benign Benign repository summary  [SIMULATED]
-  events   : 11   agents: main   mcp server: agent-trace-lab-server 1.4.0 via stdio (MCP 2025-11-25)
+  events   : 11   agents: main   mcp server: agent-trace-lab-server 1.5.0 via stdio (MCP 2025-11-25)
   findings : none
 
 ▶ prompt-injection Prompt injection in a README  [SIMULATED]

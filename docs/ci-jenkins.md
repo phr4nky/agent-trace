@@ -40,14 +40,14 @@ No Rust toolchain is required on the agent if you use the release binary.
 **Option A: release binary (recommended).** Download it once per workspace and keep it as a cache:
 
 ```bash
-curl -fsSL "https://github.com/phr4nky/agent-trace/releases/download/v1.4.0/agent-trace-v1.4.0-x86_64-unknown-linux-gnu.tar.gz" \
+curl -fsSL "https://github.com/phr4nky/agent-trace/releases/download/v1.5.0/agent-trace-v1.5.0-x86_64-unknown-linux-gnu.tar.gz" \
   | tar -xz -C .agent-trace/bin --strip-components=1
 ```
 
 **Option B: cargo.** Use this when the agent already has Rust:
 
 ```bash
-cargo install --locked --git https://github.com/phr4nky/agent-trace --tag v1.4.0 agent-trace-cli
+cargo install --locked --git https://github.com/phr4nky/agent-trace --tag v1.5.0 agent-trace-cli
 ```
 
 **Option C: Docker agent.** Run the pipeline in a container that has `curl`, then use option A:
@@ -134,8 +134,8 @@ The example Jenkinsfile has a parameter for this:
 | `medium` | Also injection-like text in untrusted content (AT-001), authority spoofing (AT-005) and policy denials (AT-004) |
 | `low` | Everything |
 
-`critical` is accepted as well, but no rule in v1.4.0 raises a critical finding, so a `critical`
-gate never fails today.
+`critical` is accepted as well, but no built-in rule in v1.5.0 raises a critical finding, so a `critical`
+gate only fails on a custom rule with `severity = "critical"` (see [rules.md](rules.md)).
 
 ## 4. Evidence in the build
 

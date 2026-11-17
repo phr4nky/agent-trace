@@ -1,6 +1,6 @@
 # Roadmap
 
-## Unreleased
+## v1.5.0
 
 - `agent-trace sarif FILE...` and `export --format sarif`: SARIF 2.1.0 for GitHub Code Scanning,
   alerts at the line of the risky tool request in the trace file, evidence as a code flow
