@@ -63,7 +63,6 @@
 
 ## In review
 
-- SARIF export and GitHub Code Scanning integration (#13)
 - Tamper evidence: hash-chained and signed exports (#14)
 - Retention and redaction configuration, declarative rules (#15)
 - OTLP ingestion with a versioned GenAI semantic-convention mapping (#16)
