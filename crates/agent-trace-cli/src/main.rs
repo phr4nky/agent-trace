@@ -208,6 +208,21 @@ enum Command {
         #[arg(long, value_enum)]
         fail_on: Option<Threshold>,
     },
+    /// Send recorded traces to agent-trace-server (store and forward): what is new since the
+    /// last run, or continuously with --follow. The token comes from $AGENT_TRACE_SHIP_TOKEN
+    /// (or the variable named by `token_env` in [ship]).
+    Ship {
+        /// Server URL, e.g. https://trace.example.com or http://localhost:8080 (default: `url`
+        /// in the [ship] table of agent-trace.toml).
+        #[arg(long, value_name = "URL")]
+        to: Option<String>,
+        /// Keep running and send new events as they are recorded (until Ctrl-C).
+        #[arg(long)]
+        follow: bool,
+        /// Seconds between checks with --follow.
+        #[arg(long, default_value_t = 2, value_name = "SECONDS")]
+        interval: u64,
+    },
     /// Delete old traces (retention). Defaults come from [retention] in agent-trace.toml;
     /// traces still being recorded are kept.
     Prune {
@@ -611,6 +626,18 @@ fn main() -> ExitCode {
         return ExitCode::from(EXIT_ERROR);
     }
     let result = match cli.command {
+        Command::Ship {
+            to,
+            follow,
+            interval,
+        } => commands::ship::run(
+            &ctx,
+            commands::ship::ShipArgs {
+                to,
+                follow,
+                interval,
+            },
+        ),
         Command::Prune {
             older_than,
             keep,

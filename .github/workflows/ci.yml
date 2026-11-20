@@ -41,6 +41,32 @@ jobs:
           cargo run -p agent-trace-cli --locked -- --no-color --data-dir "$RUNNER_TEMP/agent-trace" trace list
           cargo run -p agent-trace-cli --locked -- --no-color --data-dir "$RUNNER_TEMP/agent-trace" analyze --latest
 
+  ui:
+    name: web UI (Angular, SwipyUI)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: Test
+        run: npx ng test --watch=false
+      - name: Build
+        run: npx ng build
+      - name: No inline scripts or event handlers (strict CSP)
+        run: |
+          index=dist/agent-trace-ui/browser/index.html
+          if grep -Eq '<script>|<script [^>]*>[^<]|[[:space:]]on[a-z]+=' "$index"; then
+            echo "index.html has an inline script or event handler attribute:"; cat "$index"; exit 1
+          fi
+
   databases:
     name: storage backends (PostgreSQL, MariaDB, MySQL)
     runs-on: ubuntu-latest

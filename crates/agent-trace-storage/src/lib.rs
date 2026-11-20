@@ -6,6 +6,8 @@
 
 pub mod backend;
 pub mod config;
+pub mod graph;
+pub mod ingest;
 pub mod integrity;
 pub mod jsonl;
 pub mod live;
@@ -35,7 +37,7 @@ pub use live::LiveWriter;
 pub use ocsf::{SiemFormat, ocsf_events, write_siem};
 pub use sarif::{SarifTrace, jsonl_event_lines, write_sarif};
 pub use shared::SharedTrace;
-pub use store::{Store, TraceSource, TraceSummary};
+pub use store::{Source, SourceSummary, Store, TraceSource, TraceSummary};
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -67,6 +69,8 @@ pub enum StorageError {
     Backend(String),
     #[error("database configuration: {0}")]
     Config(String),
+    #[error("source {0:?} already exists")]
+    DuplicateSource(String),
 }
 
 macro_rules! storage_error_from {

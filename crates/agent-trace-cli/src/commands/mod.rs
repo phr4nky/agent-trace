@@ -12,6 +12,7 @@ pub mod proxy;
 pub mod prune;
 pub mod replay;
 pub mod sarif;
+pub mod ship;
 pub mod trace;
 
 use std::path::{Path, PathBuf};

@@ -1,0 +1,40 @@
+# agent-trace team server: PostgreSQL + agent-trace-server (API and web UI on http://localhost:8080).
+#
+#   docker compose up -d --build
+#   docker compose exec server agent-trace-server source add laptop   # prints the token once
+#   AGENT_TRACE_SHIP_TOKEN=ats_… agent-trace ship --to http://localhost:8080
+#
+# The web UI and the read API have no login yet, so the port is published on 127.0.0.1 only.
+# The database is reachable only inside this compose network. See docs/server.md.
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: agent_trace
+      POSTGRES_PASSWORD: ${AGENT_TRACE_DB_PASSWORD:-agent_trace_demo}
+      POSTGRES_DB: agent_trace
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_trace -d agent_trace"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  server:
+    build:
+      context: .
+      dockerfile: crates/agent-trace-server/Dockerfile
+    image: agent-trace-server:local
+    environment:
+      # Non-loopback databases need TLS unless the URL says otherwise; this one is only
+      # reachable inside the compose network.
+      AGENT_TRACE_DATABASE_URL: postgres://agent_trace:${AGENT_TRACE_DB_PASSWORD:-agent_trace_demo}@db:5432/agent_trace?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  db-data:

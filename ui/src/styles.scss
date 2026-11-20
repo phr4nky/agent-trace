@@ -1,0 +1,32 @@
+// SwipyUI theme and Angular CDK overlay styles come from angular.json ("styles").
+// agent-trace brand: the primary palette in orange (light mode uses 600–800, dark 200–400).
+:root {
+  --syui-primary-50: #fff7ed;
+  --syui-primary-100: #ffedd5;
+  --syui-primary-200: #fed7aa;
+  --syui-primary-300: #fdba74;
+  --syui-primary-400: #fb923c;
+  --syui-primary-500: #f97316;
+  --syui-primary-600: #ea580c;
+  --syui-primary-700: #c2410c;
+  --syui-primary-800: #9a3412;
+  --syui-primary-900: #7c2d12;
+  --syui-primary-950: #431407;
+  --syui-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  // Page background behind the cards (SwipyUI has no token for it): a step darker than the
+  // cards in both modes.
+  --at-page-background: var(--syui-surface-100);
+}
+
+.syui-dark {
+  --at-page-background: var(--syui-surface-950);
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: var(--syui-font-family);
+  background: var(--at-page-background);
+  color: var(--syui-text-color);
+}

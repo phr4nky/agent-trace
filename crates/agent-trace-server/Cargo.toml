@@ -1,0 +1,39 @@
+[package]
+name = "agent-trace-server"
+description = "Team server for agent-trace: receives traces from recorders (agent-trace ship), stores them, and serves a read API and the web UI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "agent-trace-server"
+path = "src/main.rs"
+
+[dependencies]
+agent-trace-core.workspace = true
+agent-trace-storage.workspace = true
+anyhow.workspace = true
+axum = { version = "0.8.4", default-features = false, features = ["http1", "tokio", "json", "query"] }
+clap.workspace = true
+dirs.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["net", "fs"] }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+rustls.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -7,6 +7,8 @@
 //! connections. `agent-trace-mcp` (lab, proxy logic) stays free of networking code: it gets
 //! the finished connection as an [`McpSession`].
 
+pub mod ship;
+
 use std::collections::HashMap;
 
 use agent_trace_core::Redactor;

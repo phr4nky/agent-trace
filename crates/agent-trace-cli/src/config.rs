@@ -45,6 +45,20 @@ pub struct Config {
     /// `--profile` or `$AGENT_TRACE_PROFILE`.
     #[serde(default)]
     pub profiles: BTreeMap<String, ProfileConfig>,
+    /// `agent-trace ship` (`[ship]`): where recorded traces are sent.
+    #[serde(default)]
+    pub ship: ShipSection,
+}
+
+/// The `[ship]` table: the agent-trace-server that `agent-trace ship` sends traces to.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShipSection {
+    /// Server URL (`https://…`, or `http://localhost:…`); `--to` overrides it.
+    pub url: Option<String>,
+    /// Environment variable that holds the source token (default `AGENT_TRACE_SHIP_TOKEN`).
+    /// The token itself never goes into this file.
+    pub token_env: Option<String>,
 }
 
 /// Environment variable that selects a profile when `--profile` is not given.

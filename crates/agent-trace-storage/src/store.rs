@@ -13,11 +13,16 @@ use crate::StorageError;
 use crate::backend::{Backend, Dialect, SqlValue};
 use crate::config::DatabaseConfig;
 
+mod sources;
+pub use sources::{Source, SourceSummary};
+
 /// Where a trace came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TraceSource {
     Recorded,
     Imported,
+    /// Sent by a recorder to `agent-trace-server` (`agent-trace ship`).
+    Received,
 }
 
 impl TraceSource {
@@ -25,6 +30,7 @@ impl TraceSource {
         match self {
             Self::Recorded => "recorded",
             Self::Imported => "imported",
+            Self::Received => "received",
         }
     }
 }
@@ -116,7 +122,23 @@ fn migrations(d: Dialect) -> Vec<(i64, Vec<String>)> {
         "ALTER TABLE events ADD COLUMN agent_id VARCHAR(64)".to_owned(),
         "CREATE INDEX idx_events_agent ON events(trace_id, agent_id)".to_owned(),
     ];
-    vec![(1, v1), (2, v2)]
+    // v3: recorders that send traces to agent-trace-server (`sources`), and the source of a
+    // trace. Local databases never fill them.
+    let v3 = vec![
+        format!(
+            "CREATE TABLE sources (
+                source_id     VARCHAR(36) NOT NULL PRIMARY KEY,
+                name          VARCHAR(64) NOT NULL UNIQUE,
+                token_hash    VARCHAR(64) NOT NULL UNIQUE,
+                created_at    VARCHAR(40) NOT NULL,
+                last_seen_at  VARCHAR(40),
+                last_ip       VARCHAR(64)
+            ){sfx}"
+        ),
+        "ALTER TABLE traces ADD COLUMN source_id VARCHAR(36)".to_owned(),
+        "CREATE INDEX idx_traces_source ON traces(source_id)".to_owned(),
+    ];
+    vec![(1, v1), (2, v2), (3, v3)]
 }
 
 pub struct Store {
@@ -769,7 +791,10 @@ mod tests {
                 &[],
             )
             .unwrap();
-        assert_eq!(versions.len(), 2);
+        assert_eq!(versions.len(), 3);
+        // v3: an old trace has no source.
+        let id = list[0].trace.trace_id;
+        assert_eq!(store.trace_source(id).unwrap(), Some(None));
     }
 
     /// Findings stored before taxonomy tags existed load with the built-in tags.
