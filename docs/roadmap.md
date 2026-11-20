@@ -1,5 +1,34 @@
 # Roadmap
 
+## v1.6.0
+
+- Team server and web UI: `agent-trace ship` sends recorded traces (store and forward, a token
+  per source) to `agent-trace-server`, which checks, redacts and analyzes them again; the web UI
+  (Angular + SwipyUI, `ui/`) shows the traces of each source with their causal graph.
+  `docker-compose.yml` runs it with PostgreSQL
+- Canary tokens (`[[canaries]]`, `agent-trace canary new|list`): decoy secrets, matched before
+  redaction; a tool call that carries one is reported (AT-007, critical) and denied in enforce
+  and ask mode
+- Rug-pull protection: the MCP proxy pins every tool definition on first use and reports a
+  changed or added tool (AT-008); in enforce and ask mode a changed tool is hidden and denied
+  until `agent-trace pins reset` accepts it
+- Ask mode (`--mode ask`): a privileged call after untrusted content, or one to a destination
+  that is not allowlisted, is put to a human (Claude Code `permissionDecision: "ask"`, MCP
+  elicitation in the proxy) instead of being blocked; task profiles (`[profiles.<name>]`,
+  `--profile`) allow only the tools a task needs
+- Attack library: published agent attacks ([GitHub MCP][github], [Supabase MCP][supabase],
+  [tool poisoning][poisoning], [EchoLeak][echoleak]) as a `replay` suite with fake data
+- Taxonomy tags: every built-in rule mapped to the [OWASP Top 10 for LLM Applications][owasp-llm]
+  and [MITRE ATLAS][atlas], shown in reports, SARIF, SIEM exports, the explorer and the graph
+- `agent-trace evidence`: an evidence report for record-keeping duties such as
+  [Article 12 of the EU AI Act][aiact12] (what was recorded, by which configuration, how long it
+  is kept, whether exports are unchanged); explicitly not a compliance statement
+- SIEM export: `export --format ocsf|splunk-hec|elastic` ([OCSF][ocsf] 1.9.0, Splunk HEC,
+  Elasticsearch bulk with ECS)
+- Graph: an info card with the details of each event; fixes for the redaction of command-line
+  credentials and common token formats, OTLP traces split across files, and `on_error = "deny"`
+  when a hook cannot load its configuration
+
 ## v1.5.0
 
 - `agent-trace sarif FILE...` and `export --format sarif`: SARIF 2.1.0 for GitHub Code Scanning,
@@ -61,89 +90,12 @@
 - Rules AT-001 … AT-006 (incl. cross-agent taint), golden traces
 - CLI, ratatui explorer, JSONL/JSON import/export, CI + release workflows
 
-## Next
+## Later
 
-In order of priority. Each item names the real-world problem it answers and a rough effort.
-
-### 1. Canary tokens: from indicator to proof
-
-Plant decoy secrets (a fake cloud key in `.env`, a token in a document or a database row) and
-report a critical finding when one of them shows up in the arguments of an outbound tool call or
-in content written to a place the attacker can read. Today's findings are indicators; a leaked
-canary is evidence.
-
-- **Real world:** in a demonstration against the Supabase MCP server, a support ticket told a
-  coding agent to read the `integration_tokens` table and write it back into the ticket, where
-  the attacker could read it ([General Analysis, July 2025][supabase]; Supabase states no
-  customer data was leaked this way). A canary row in that table would have made the leak
-  unambiguous.
-- **Effort:** small. The policy gate, the redactor and the rules already see every argument.
-
-### 2. Rug-pull protection for MCP servers
-
-Pin the tool descriptions and schemas a server announces the first time (a hash of its
-`tools/list` answer) and alert, or block in enforce mode, when they change later. The proxy
-already records `tools/list`.
-
-- **Real world:** "tool poisoning" hides instructions in tool descriptions, and a "rug pull"
-  changes a tool's description after the user approved it ([Invariant Labs, April 2025][poisoning];
-  tool poisoning is MCP03 in OWASP's MCP Top 10). Invariant's MCP-Scan pins tool definitions as
-  a separate scan; agent-trace would do it on the live connection and keep the change in the trace.
-- **Effort:** small.
-
-### 3. Approval mode and task-scoped permissions
-
-Besides allow and deny, ask a human before a privileged call that follows untrusted content
-(Claude Code: `permissionDecision: "ask"`; proxy: MCP elicitation). And scope tools to the task:
-a read-only task gets no write tools.
-
-- **Real world:** in the GitHub MCP attack, a malicious issue in a public repository made an
-  agent copy private repository content into a public pull request; the task was only to look
-  at issues ([Invariant Labs, May 2025][github]). Invariant describes it as a design problem that
-  server-side patches cannot fix, which is where a gate on the agent's side helps. Today's enforce
-  mode can only block; teams need a middle ground before they turn it on.
-- **Effort:** medium.
-
-### 4. Attack library
-
-Recordings of publicly documented agent attacks, shipped as a `replay` suite, so a model or
-prompt change can be checked against known attacks before it ships: injection through issues
-([GitHub MCP][github]), support tickets ([Supabase MCP][supabase]), tool descriptions
-([tool poisoning][poisoning]) and documents or emails pulled into context ([EchoLeak,
-CVE-2025-32711][echoleak], a zero-click prompt injection in Microsoft 365 Copilot).
-
-- **Real world:** before switching to a new model version, a team runs the suite and sees
-  whether the new model still follows the injected instructions.
-- **Effort:** small to medium. `replay` and suites exist; the work is faithful recordings.
-
-### 5. Taxonomy tags
-
-Map rules and findings to the [OWASP Top 10 for LLM Applications][owasp-llm] and
-[MITRE ATLAS][atlas], and show the tags in reports, SARIF and the explorer.
-
-- **Real world:** security teams, audits and risk registers sort findings by these
-  taxonomies, not by tool-specific rule IDs.
-- **Effort:** small.
-
-### 6. Compliance evidence
-
-An evidence report built from signed traces: what was recorded, by which configuration, how long
-it is kept, and proof that it is unchanged. Aimed at record-keeping duties such as
-[Article 12 of the EU AI Act][aiact12] (automatic logging for high-risk AI systems; deployers
-keep logs for at least six months under Article 26(6)).
-
-- **Real world:** operators of high-risk AI systems must be able to show their logs. The
-  application dates of these obligations are still subject to change; the report will not
-  claim compliance, only provide the evidence.
-- **Effort:** medium; builds on signed exports (#14) and retention (#15).
-
-### 7. SIEM export
-
-Findings and events as [OCSF][ocsf] events, plus ready-made outputs for Splunk and Elastic.
-
-- **Real world:** security operations teams triage incidents in their SIEM; an agent incident
-  that only lives in a separate tool is easily missed.
-- **Effort:** small to medium.
+- A local OTLP/HTTP receiver, and mappings for OpenInference and OpenLLMetry attributes
+- Baselines of normal agent behavior (statistical, no model judges)
+- Agent-to-agent protocols (A2A) across organizations
+- Computer-use and browser agents: screen and page content as untrusted input
 
 [github]: https://invariantlabs.ai/blog/mcp-github-vulnerability
 [supabase]: https://generalanalysis.com/blog/supabase-mcp-blog
@@ -153,10 +105,3 @@ Findings and events as [OCSF][ocsf] events, plus ready-made outputs for Splunk a
 [atlas]: https://atlas.mitre.org/
 [aiact12]: https://artificialintelligenceact.eu/article/12/
 [ocsf]: https://ocsf.io/
-
-## Later
-
-- A local OTLP/HTTP receiver, and mappings for OpenInference and OpenLLMetry attributes
-- Baselines of normal agent behavior (statistical, no model judges)
-- Agent-to-agent protocols (A2A) across organizations
-- Computer-use and browser agents: screen and page content as untrusted input
