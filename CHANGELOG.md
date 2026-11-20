@@ -50,6 +50,17 @@ The section of a version is used as the release notes of its GitHub release.
   `elastic` an Elasticsearch `_bulk` body with ECS 9.5 fields (`event.kind` `alert` for
   findings) and the OCSF event under `ocsf`. Redacted like every export; nothing is sent over
   the network. See docs/siem.md.
+- **Compliance evidence** (`agent-trace evidence`): an evidence report built from signed JSONL
+  exports and/or stored traces, in Markdown or JSON (`report_version` 1). It shows what was
+  recorded (per trace: time span, events, agents, MCP servers, tools, findings by severity and
+  rule, redaction counts), by which configuration (SHA-256 of the canonical configuration, plus
+  a summary with pattern labels and canary names only), how long traces are kept
+  (`[retention]`, oldest and newest stored trace, a note below six months or without
+  retention) and whether each file is unchanged and signed by a trusted key, checked like
+  `verify`. Aimed at record-keeping duties such as Articles 12 and 26(6) of the EU AI Act; the
+  report is explicitly not a compliance statement and lists what it does not prove. A file
+  that fails verification is marked `FAILED` and the command exits with 1. Payloads are never
+  included. `--output` creates a private file. See docs/compliance-evidence.md.
 - **Rug-pull protection for MCP servers** (`agent-trace pins list|show|reset`, `[proxy]
   pin_tools`, on by default): the proxy pins every tool definition a server announces the first
   time (SHA-256 over the canonical JSON of name, title, description, schemas and annotations)

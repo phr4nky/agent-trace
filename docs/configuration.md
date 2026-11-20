@@ -130,3 +130,9 @@ agent-trace prune                           # use [retention]
   "delete everything".
 - Pruning is not automatic: run it from cron or a CI schedule.
 - Exports (JSONL, JSON, SARIF, graphs) are files you own; `prune` does not touch them.
+- `agent-trace evidence` reports the `[retention]` limits with the oldest and newest stored
+  trace, and adds a note when no retention is configured or `max_age_days` is below 183 days
+  (Article 26(6) of the EU AI Act names at least six months for deployers of high-risk AI
+  systems). It also reports a SHA-256 of the whole configuration in canonical form (key order
+  and formatting do not matter; canary values are left out). See
+  [compliance-evidence.md](compliance-evidence.md).
