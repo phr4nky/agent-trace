@@ -202,7 +202,11 @@ Open it in any browser:
 - **Lanes** for each agent and each MCP server, time from left to right.
 - **Edges:** solid = caused by, dashed = context (content in view), faint = structure.
 - **Click a finding** to highlight its evidence path; **click an event** to highlight everything
-  it came from and led to, and to read its (redacted) payload and links.
+  it came from and led to. An info card next to the event shows its agent, origin, trust and
+  tool state, timing, a payload summary, the findings it is evidence for and the lower-trust
+  events that influenced it; the side panel adds the full upstream chain, the (redacted)
+  payload and metadata. **←/→** step through the events in order.
+- Events that are evidence for a finding carry a dot in the colour of its severity.
 - Pan by dragging, zoom with the wheel, search events, Esc clears.
 
 The page is self-contained and makes no network requests: no CDN, no fonts, no server. Its

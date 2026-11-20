@@ -21,15 +21,15 @@
   <input type="search" id="search" placeholder="Search events…" aria-label="Search events">
   <button type="button" id="fit">Fit</button>
   <button type="button" id="clear">Clear</button>
-  <span class="hint">Click an event or finding · drag to pan · wheel to zoom · Esc clears</span>
+  <span class="hint">Click an event or finding · ←/→ step through events · drag to pan · wheel to zoom · Esc clears</span>
 </div>
-<div id="graph"><svg id="svg" role="img" aria-label="Causal graph of the trace"></svg></div>
+<div id="graph"><svg id="svg" role="img" aria-label="Causal graph of the trace"></svg><div id="card" class="card" role="dialog" aria-label="Event summary" hidden></div></div>
 <aside>
   <section>
     <h2>Findings</h2>
     <div id="findings"></div>
   </section>
-  <section>
+  <section id="event-section">
     <h2>Event</h2>
     <div id="details"><p class="empty">Select an event to see its links and payload.</p></div>
   </section>

@@ -71,6 +71,118 @@
     outgoing.get(l.from).push(l);
   }
 
+  // Provenance follows the cause (or the parent if no cause was recorded) plus context, like
+  // the analyzer does, independent of which edge types are shown.
+  function provenanceOf(e) {
+    const out = [];
+    const c = e.caused_by_event_id || e.parent_event_id;
+    if (c && byId.has(c)) out.push(c);
+    for (const x of e.context_event_ids || []) if (byId.has(x) && !out.includes(x)) out.push(x);
+    return out;
+  }
+  const provUp = new Map(events.map((e) => [e.event_id, provenanceOf(e)]));
+  const provDown = new Map();
+  for (const [id, ups] of provUp) {
+    for (const u of ups) {
+      if (!provDown.has(u)) provDown.set(u, []);
+      provDown.get(u).push(id);
+    }
+  }
+  function closure(id, map) {
+    const seen = new Set([id]);
+    const stack = [id];
+    while (stack.length) {
+      for (const next of map.get(stack.pop()) || []) {
+        if (!seen.has(next)) { seen.add(next); stack.push(next); }
+      }
+    }
+    seen.delete(id);
+    return [...seen].map((x) => byId.get(x)).sort((a, b) => a.sequence - b.sequence);
+  }
+
+  const SEVERITY = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  const bySeverity = (a, b) =>
+    (SEVERITY[a.severity] ?? 9) - (SEVERITY[b.severity] ?? 9) || a.rule_id.localeCompare(b.rule_id);
+  const findingsOf = new Map();
+  for (const f of findings) {
+    for (const id of f.evidence_event_ids || []) {
+      if (!findingsOf.has(id)) findingsOf.set(id, []);
+      if (!findingsOf.get(id).includes(f)) findingsOf.get(id).push(f);
+    }
+  }
+  for (const list of findingsOf.values()) list.sort(bySeverity);
+
+  // Timing. Timestamps are RFC 3339, possibly with nanoseconds; Date.parse wants milliseconds.
+  function millis(ts) {
+    return typeof ts === "string" ? Date.parse(ts.replace(/(\.\d{3})\d+/, "$1")) : NaN;
+  }
+  const startMs = (() => {
+    const all = events.map((e) => millis(e.timestamp)).filter(Number.isFinite);
+    const created = millis(report.trace && report.trace.created_at);
+    if (Number.isFinite(created)) all.push(created);
+    return all.length ? Math.min(...all) : NaN;
+  })();
+  function delta(d) {
+    if (!Number.isFinite(d)) return null;
+    const a = Math.abs(d);
+    const s = a < 1000 ? Math.round(a) + " ms"
+      : a < 60000 ? (a / 1000).toFixed(2) + " s"
+      : Math.floor(a / 60000) + " min " + Math.round((a % 60000) / 1000) + " s";
+    return (d < 0 ? "−" : "+") + s;
+  }
+  function timing(e) {
+    const i = events.indexOf(e);
+    const t = millis(e.timestamp);
+    const rows = [];
+    const sinceStart = delta(t - startMs);
+    if (sinceStart) rows.push(["since start", sinceStart]);
+    if (i > 0) {
+      const prev = events[i - 1];
+      const d = delta(t - millis(prev.timestamp));
+      if (d) rows.push(["after #" + prev.sequence, d]);
+    }
+    const cause = e.caused_by_event_id && byId.get(e.caused_by_event_id);
+    if (cause) {
+      const d = delta(t - millis(cause.timestamp));
+      if (d) rows.push(["after cause #" + cause.sequence, d]);
+    }
+    return rows;
+  }
+
+  // A short, flat view of the payload: top-level values and one level of nested values.
+  function short(v, n) {
+    let s = typeof v === "string" ? v : JSON.stringify(v);
+    if (s === undefined) s = String(v);
+    s = s.replace(/\s+/g, " ").trim();
+    return s.length > n ? s.slice(0, n - 1) + "…" : s;
+  }
+  function payloadSummary(payload, max) {
+    const rows = [];
+    const add = (k, v) => { if (rows.length < max) rows.push([k, short(v, 160)]); };
+    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+      for (const [k, v] of Object.entries(payload)) {
+        if (v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length) {
+          for (const [k2, v2] of Object.entries(v)) add(k + "." + k2, v2);
+        } else {
+          add(k, v);
+        }
+      }
+    } else if (payload != null) {
+      add("value", payload);
+    }
+    return rows;
+  }
+  function payloadFacts(e) {
+    const json = JSON.stringify(e.payload) || "";
+    const bytes = new TextEncoder().encode(json).length;
+    const placeholders = (json.match(/\[REDACTED/g) || []).length;
+    const counted = e.metadata && typeof e.metadata.redactions === "number" ? e.metadata.redactions : 0;
+    return { bytes, redactions: Math.max(placeholders, counted) };
+  }
+  function bytesText(n) {
+    return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KiB" : (n / 1048576).toFixed(1) + " MiB";
+  }
+
   // ---- layout --------------------------------------------------------------------------
   const DX = 104, DY = 110, LEFT = 40, TOP = 70, R = 9;
   const lanes = [];
@@ -139,6 +251,11 @@
     const g = el("g", { class: "node" + (lower ? " lower" : ""), transform: `translate(${p.x},${p.y})`,
       tabindex: 0 }, nodeLayer);
     el("circle", { r: R, class: "k-" + kindClass(e) }, g);
+    const flagged = findingsOf.get(e.event_id);
+    if (flagged) {
+      // A dot in the colour of the most severe finding this event is evidence for.
+      el("circle", { r: 3.5, cx: R * 0.8, cy: -R * 0.8, class: "flag " + flagged[0].severity }, g);
+    }
     // Labels below the node; same-lane arcs run above it.
     const seq = el("text", { class: "seq", y: R + 12, "text-anchor": "middle" }, g);
     seq.textContent = "#" + e.sequence;
@@ -146,7 +263,8 @@
     const label = el("text", { y: R + 25, "text-anchor": "middle" }, g);
     label.textContent = name.length > 15 ? name.slice(0, 14) + "…" : name;
     const tip = el("title", {}, g);
-    tip.textContent = `#${e.sequence} ${e.kind} · ${name}` + (lower ? " · lower trust" : "");
+    tip.textContent = `#${e.sequence} ${e.kind} · ${name}` + (lower ? " · lower trust" : "") +
+      (flagged ? ` · ${flagged.length} finding${flagged.length > 1 ? "s" : ""}` : "");
     g.addEventListener("click", (ev) => { ev.stopPropagation(); selectEvent(e.event_id); });
     g.addEventListener("keydown", (ev) => { if (ev.key === "Enter") selectEvent(e.event_id); });
     nodeEls.set(e.event_id, g);
@@ -161,6 +279,17 @@
       // Top of the lane band, in screen coordinates.
       label.setAttribute("y", String(view.y + (TOP + i * DY - DY / 2) * view.k + 14));
     });
+    placeCard();
+  }
+  // Pans (without zooming) so that an event is comfortably inside the view.
+  function ensureVisible(id) {
+    const p = pos.get(id);
+    const box = svg.getBoundingClientRect();
+    const sx = view.x + p.x * view.k, sy = view.y + p.y * view.k;
+    const mx = Math.min(160, box.width / 4), my = Math.min(80, box.height / 4);
+    if (sx < mx || sx > box.width - mx) view.x = box.width / 3 - p.x * view.k;
+    if (sy < my || sy > box.height - my) view.y = box.height / 2 - p.y * view.k;
+    apply();
   }
   function fit(ids) {
     const box = svg.getBoundingClientRect();
@@ -185,28 +314,40 @@
     view.k = k;
     apply();
   }, { passive: false });
+  // The pointer is captured only once it really drags: capturing on pointerdown would send
+  // the click to the svg instead of the node under it, so clicking a node would do nothing.
   let drag = null;
+  let suppressClick = false;
   svg.addEventListener("pointerdown", (ev) => {
-    drag = { x: ev.clientX, y: ev.clientY, vx: view.x, vy: view.y, moved: false };
-    svg.setPointerCapture(ev.pointerId);
-    svg.classList.add("dragging");
+    if (ev.button !== 0) return;
+    suppressClick = false;
+    drag = { x: ev.clientX, y: ev.clientY, vx: view.x, vy: view.y, moved: false, id: ev.pointerId };
   });
   svg.addEventListener("pointermove", (ev) => {
-    if (!drag) return;
+    if (!drag || ev.pointerId !== drag.id) return;
     const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
-    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    if (!drag.moved) {
+      if (Math.abs(dx) + Math.abs(dy) <= 3) return;
+      drag.moved = true;
+      svg.setPointerCapture(drag.id);
+      svg.classList.add("dragging");
+    }
     view.x = drag.vx + dx;
     view.y = drag.vy + dy;
     apply();
   });
-  svg.addEventListener("pointerup", () => {
+  function endDrag() {
     svg.classList.remove("dragging");
-    const moved = drag && drag.moved;
+    suppressClick = !!(drag && drag.moved);
     drag = null;
-    if (!moved) svg.dataset.clickedBackground = "1";
-  });
+  }
+  svg.addEventListener("pointerup", endDrag);
+  svg.addEventListener("pointercancel", endDrag);
+  // Clicks on nodes stop propagation; a click that reaches the svg is on the background,
+  // unless it ends a drag.
   svg.addEventListener("click", () => {
-    if (svg.dataset.clickedBackground) { delete svg.dataset.clickedBackground; clearSelection(); }
+    if (suppressClick) { suppressClick = false; return; }
+    clearSelection();
   });
 
   // ---- highlighting --------------------------------------------------------------------
@@ -247,26 +388,72 @@
     if (cls) n.className = cls;
     return n;
   }
-  function linkButton(id) {
-    const e = byId.get(id);
-    const b = text("button", e ? `#${e.sequence} ${e.kind}` : id, "linkbtn");
+  function button(label, cls, onClick) {
+    const b = text("button", label, cls);
     b.type = "button";
-    b.addEventListener("click", () => selectEvent(id));
+    b.addEventListener("click", (ev) => { ev.stopPropagation(); onClick(b); });
     return b;
   }
-  function showDetails(e) {
-    details.replaceChildren();
+  function linkButton(id) {
+    const e = byId.get(id);
+    const b = button(e ? `#${e.sequence} ${e.kind}` : id, "linkbtn", () => selectEvent(id));
+    if (e && e.trust_level === "lower_trust") {
+      b.classList.add("lower");
+      b.title = "lower-trust content";
+    }
+    return b;
+  }
+  function linkList(ids) {
+    const box = document.createElement("div");
+    box.className = "links";
+    for (const id of ids) box.append(linkButton(id));
+    return box;
+  }
+  function defList(rows) {
     const dl = document.createElement("dl");
-    const rows = [
-      ["sequence", "#" + e.sequence], ["kind", e.kind], ["name", e.name],
-      ["agent", e.agent_id || "main"], ["origin", e.origin], ["trust", e.trust_level],
-      ["state", e.tool_state || ""], ["time", e.timestamp], ["event id", e.event_id],
-    ];
     for (const [k, v] of rows) {
       if (v === "" || v == null) continue;
       dl.append(text("dt", k), text("dd", v));
     }
-    details.append(dl);
+    return dl;
+  }
+  function findingButton(f) {
+    const b = button("", "findingbtn", () => { clearHighlight(); selectFinding(f); });
+    b.append(text("span", f.severity, "sev " + f.severity), text("strong", f.rule_id),
+      text("span", f.title, "ftitle"));
+    return b;
+  }
+  const canCopy = !!(navigator.clipboard && navigator.clipboard.writeText);
+  function copyButton(label, value) {
+    return button(label, "linkbtn", (b) => {
+      navigator.clipboard.writeText(value).then(() => {
+        b.textContent = "copied";
+        setTimeout(() => { b.textContent = label; }, 1200);
+      }, () => { b.textContent = "copy failed"; });
+    });
+  }
+  function showDetails(e) {
+    details.replaceChildren();
+    const facts = payloadFacts(e);
+    details.append(defList([
+      ["sequence", "#" + e.sequence], ["kind", e.kind], ["name", e.name],
+      ["agent", e.agent_id || "main"], ["lane", laneOf(e)], ["origin", e.origin],
+      ["trust", e.trust_level], ["state", e.tool_state || ""],
+      ["mode", e.execution_mode], ["schema", e.schema_version],
+      ["time", e.timestamp], ...timing(e),
+      ["payload", bytesText(facts.bytes) + (facts.redactions ? ` · ${facts.redactions} redacted` : "")],
+      ["event id", e.event_id],
+    ]));
+
+    const fs = findingsOf.get(e.event_id) || [];
+    if (fs.length) {
+      details.append(text("h2", `evidence for ${fs.length} finding${fs.length > 1 ? "s" : ""}`));
+      const box = document.createElement("div");
+      box.className = "stack";
+      for (const f of fs) box.append(findingButton(f));
+      details.append(box);
+    }
+
     for (const [label, ids] of [
       ["caused by", e.caused_by_event_id ? [e.caused_by_event_id] : []],
       ["context", e.context_event_ids || []],
@@ -274,23 +461,138 @@
       ["leads to", (outgoing.get(e.event_id) || []).filter((l) => l.type !== "parent").map((l) => l.to)],
     ]) {
       if (!ids.length) continue;
-      details.append(text("h2", label));
-      const box = document.createElement("div");
-      box.className = "links";
-      for (const id of ids) box.append(linkButton(id));
-      details.append(box);
+      details.append(text("h2", label), linkList(ids));
     }
-    details.append(text("h2", "payload (redacted)"), text("pre", JSON.stringify(e.payload, null, 2)));
+
+    const up = closure(e.event_id, provUp);
+    const down = closure(e.event_id, provDown);
+    const tainted = up.filter((x) => x.trust_level === "lower_trust");
+    if (up.length || down.length) {
+      details.append(text("h2", "provenance"));
+      details.append(defList([
+        ["upstream", up.length + " event" + (up.length === 1 ? "" : "s")],
+        ["downstream", down.length + " event" + (down.length === 1 ? "" : "s")],
+      ]));
+      if (tainted.length) {
+        details.append(text("p", `Influenced by ${tainted.length} lower-trust event${tainted.length > 1 ? "s" : ""}:`, "taint"),
+          linkList(tainted.map((x) => x.event_id)));
+      }
+      if (up.length) {
+        details.append(text("h2", "upstream chain"), linkList(up.map((x) => x.event_id)));
+      }
+    }
+
+    const head = text("h2", "payload (redacted)");
+    if (canCopy) head.append(copyButton("copy", JSON.stringify(e.payload, null, 2)));
+    details.append(head, text("pre", JSON.stringify(e.payload, null, 2)));
     if (e.metadata && Object.keys(e.metadata).length) {
       details.append(text("h2", "metadata"), text("pre", JSON.stringify(e.metadata, null, 2)));
     }
   }
 
+  // ---- info card next to the selected node ---------------------------------------------
+  const graphBox = document.getElementById("graph");
+  const card = document.getElementById("card");
+  let cardFor = null;
+  function showCard(e) {
+    cardFor = e.event_id;
+    card.replaceChildren();
+    const i = events.indexOf(e);
+
+    const head = document.createElement("div");
+    head.className = "card-head";
+    head.append(text("span", "", "dot k-" + kindClass(e)), text("span", `#${e.sequence} ${e.kind}`, "card-kind"));
+    const nav = document.createElement("span");
+    nav.className = "card-nav";
+    const prev = button("‹", "iconbtn", () => selectEvent(events[i - 1].event_id, true));
+    prev.title = "previous event (←)";
+    prev.disabled = i <= 0;
+    const next = button("›", "iconbtn", () => selectEvent(events[i + 1].event_id, true));
+    next.title = "next event (→)";
+    next.disabled = i >= events.length - 1;
+    const close = button("×", "iconbtn", () => clearSelection());
+    close.title = "close (Esc)";
+    nav.append(prev, next, close);
+    head.append(nav);
+    card.append(head, text("div", e.name || e.kind, "card-name"));
+
+    const chips = document.createElement("div");
+    chips.className = "chips";
+    const chip = (label, cls) => chips.append(text("span", label, "chip" + (cls ? " " + cls : "")));
+    chip(e.agent_id || "main");
+    chip(e.origin);
+    chip(String(e.trust_level).replace(/_/g, " "), e.trust_level === "lower_trust" ? "bad" : e.trust_level === "trusted" ? "good" : "");
+    if (e.tool_state) chip(e.tool_state, /blocked|failed|denied/.test(e.tool_state) ? "bad" : "");
+    const facts = payloadFacts(e);
+    if (facts.redactions) chip(`${facts.redactions} redacted`, "warn");
+    card.append(chips);
+
+    const t = timing(e);
+    if (t.length) card.append(text("div", t.map(([k, v]) => `${v} ${k}`).join(" · "), "card-time"));
+
+    const rows = payloadSummary(e.payload, 6);
+    if (rows.length) {
+      const dl = defList(rows);
+      dl.className = "card-payload";
+      card.append(dl);
+    }
+
+    const fs = findingsOf.get(e.event_id) || [];
+    if (fs.length) {
+      const box = document.createElement("div");
+      box.className = "stack";
+      for (const f of fs) box.append(findingButton(f));
+      card.append(box);
+    }
+
+    const up = closure(e.event_id, provUp);
+    const down = closure(e.event_id, provDown);
+    const tainted = up.filter((x) => x.trust_level === "lower_trust");
+    card.append(text("div", `${up.length} upstream · ${down.length} downstream`, "card-time"));
+    if (tainted.length) {
+      card.append(text("div", "Influenced by lower-trust content:", "taint"), linkList(tainted.map((x) => x.event_id)));
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "card-actions";
+    actions.append(
+      button("Focus chain", "linkbtn", () => fit([e.event_id, ...up.map((x) => x.event_id), ...down.map((x) => x.event_id)])),
+      button("All details", "linkbtn", () => document.getElementById("event-section").scrollIntoView({ behavior: "smooth", block: "start" })),
+    );
+    if (canCopy) actions.append(copyButton("Copy payload", JSON.stringify(e.payload, null, 2)));
+    card.append(actions);
+
+    card.hidden = false;
+    placeCard();
+  }
+  function hideCard() {
+    cardFor = null;
+    card.hidden = true;
+  }
+  function placeCard() {
+    if (!cardFor || card.hidden) return;
+    const p = pos.get(cardFor);
+    const W = graphBox.clientWidth, H = graphBox.clientHeight;
+    const w = card.offsetWidth, h = card.offsetHeight;
+    const sx = view.x + p.x * view.k, sy = view.y + p.y * view.k, gap = R * view.k + 14;
+    let x = sx + gap;
+    if (x + w > W - 8) x = sx - gap - w;
+    x = Math.max(8, Math.min(x, W - w - 8));
+    const y = Math.max(8, Math.min(sy - 28, H - h - 8));
+    card.style.left = x + "px";
+    card.style.top = y + "px";
+  }
+  // Wheel and drag on the card scroll the card, not the graph.
+  card.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  card.addEventListener("click", (ev) => ev.stopPropagation());
+
   let selectedFinding = null;
-  function selectEvent(id) {
+  let selectedEvent = null;
+  function selectEvent(id, reveal) {
     const e = byId.get(id);
     if (!e) return;
     selectFinding(null, false);
+    selectedEvent = id;
     const up = reach(id, incoming, (l) => l.from);
     const down = reach(id, outgoing, (l) => l.to);
     const ids = new Set([...up, ...down]);
@@ -298,28 +600,34 @@
       ((up.has(l.from) && up.has(l.to)) || (down.has(l.from) && down.has(l.to))));
     for (const [nid, g] of nodeEls) g.classList.toggle("selected", nid === id);
     showDetails(e);
+    showCard(e);
+    if (reveal) ensureVisible(id);
   }
   function clearSelection() {
     selectFinding(null, false);
+    selectedEvent = null;
+    hideCard();
     clearHighlight();
     details.replaceChildren(text("p", "Select an event to see its links and payload.", "empty"));
   }
 
   // ---- findings ------------------------------------------------------------------------
-  const SEVERITY = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
   const findingBox = document.getElementById("findings");
   const findingEls = [];
   function selectFinding(f, doHighlight = true) {
     selectedFinding = f;
     for (const { f: other, n } of findingEls) n.classList.toggle("selected", other === f);
     if (!f || !doHighlight) return;
+    selectedEvent = null;
+    hideCard();
     const ids = new Set(f.evidence_event_ids || []);
     highlight(ids, (l) => ids.has(l.from) && ids.has(l.to));
     for (const g of nodeEls.values()) g.classList.remove("selected");
     fit([...ids]);
+    const n = findingEls.find((x) => x.f === f);
+    if (n) n.n.scrollIntoView({ block: "nearest" });
   }
-  const sorted = [...findings].sort((a, b) =>
-    (SEVERITY[a.severity] ?? 9) - (SEVERITY[b.severity] ?? 9) || a.rule_id.localeCompare(b.rule_id));
+  const sorted = [...findings].sort(bySeverity);
   if (!sorted.length) findingBox.append(text("p", "No findings.", "empty"));
   for (const f of sorted) {
     const n = document.createElement("div");
@@ -329,14 +637,20 @@
     top.className = "top";
     top.append(text("span", f.severity, "sev " + f.severity), text("strong", f.rule_id),
       text("span", f.attempt_status + " · " + f.confidence + " confidence", "tag"));
-    n.append(top, text("div", f.title, "title"), text("div", f.description, "desc"));
+    const more = document.createElement("div");
+    more.className = "desc";
+    more.append(text("div", f.description));
+    if (f.remediation) more.append(text("div", "Remediation: " + f.remediation, "remedy"));
+    const evidence = (f.evidence_event_ids || []).filter((id) => byId.has(id));
+    if (evidence.length) more.append(linkList(evidence));
+    n.append(top, text("div", f.title, "title"), more);
     const pick = () => {
       if (selectedFinding === f) { clearSelection(); return; }
       clearHighlight();
       selectFinding(f);
     };
     n.addEventListener("click", pick);
-    n.addEventListener("keydown", (ev) => { if (ev.key === "Enter") pick(); });
+    n.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && ev.target === n) pick(); });
     findingBox.append(n);
     findingEls.push({ f, n });
   }
@@ -365,7 +679,14 @@
   document.getElementById("fit").addEventListener("click", () => fit());
   document.getElementById("clear").addEventListener("click", clearSelection);
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") clearSelection();
+    if (ev.key === "Escape") { clearSelection(); return; }
+    if ((ev.key === "ArrowLeft" || ev.key === "ArrowRight") && !(ev.target instanceof Element && ev.target.closest("input, textarea, select"))) {
+      if (!events.length) return;
+      const i = selectedEvent ? events.indexOf(byId.get(selectedEvent)) : -1;
+      const j = ev.key === "ArrowRight" ? Math.min(events.length - 1, i + 1) : Math.max(0, i < 0 ? 0 : i - 1);
+      ev.preventDefault();
+      selectEvent(events[j].event_id, true);
+    }
   });
 
   // ---- header & legend -----------------------------------------------------------------
