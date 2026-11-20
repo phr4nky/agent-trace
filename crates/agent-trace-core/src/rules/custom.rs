@@ -19,6 +19,7 @@ use super::{FindingDraft, Rule, RuleContext, outcome_text, tool_name, tool_outco
 use crate::event::{EventKind, TrustLevel};
 use crate::finding::{AttemptStatus, Confidence, Finding, Severity};
 use crate::policy::glob_match;
+use crate::taxonomy;
 
 /// What a custom rule looks at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -60,6 +61,9 @@ pub struct CustomRuleConfig {
     /// `content`: regex on the lower-trust content.
     #[serde(default)]
     pub pattern: Option<String>,
+    /// Taxonomy tags copied onto every finding, e.g. `["LLM01:2025", "AML.T0051", "CORP-xyz"]`.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 fn default_confidence() -> Confidence {
@@ -112,6 +116,15 @@ impl CustomRule {
         }
         if config.title.trim().is_empty() {
             return Err(format!("rule {id}: title is empty"));
+        }
+        if config.tags.len() > taxonomy::MAX_TAGS {
+            return Err(format!("rule {id}: more than {} tags", taxonomy::MAX_TAGS));
+        }
+        for (i, tag) in config.tags.iter().enumerate() {
+            taxonomy::validate_tag(tag).map_err(|e| format!("rule {id}: {e}"))?;
+            if config.tags[..i].contains(tag) {
+                return Err(format!("rule {id}: duplicate tag {tag:?}"));
+            }
         }
         let (arguments, pattern) = match config.on {
             RuleTarget::ToolCall => {
@@ -202,6 +215,9 @@ impl Rule for CustomRule {
     }
     fn default_severity(&self) -> Severity {
         self.config.severity
+    }
+    fn tags(&self) -> Vec<String> {
+        self.config.tags.clone()
     }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding> {
         let intro = if self.config.description.is_empty() {

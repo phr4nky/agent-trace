@@ -197,6 +197,11 @@ mod tests {
         let payload = report["events"][1]["payload"]["content"].as_str().unwrap();
         assert!(payload.contains(ATTACK), "{payload}");
         assert!(!report["findings"].as_array().unwrap().is_empty());
+        // Taxonomy tags travel with the findings; the card renders them as text chips.
+        for f in report["findings"].as_array().unwrap() {
+            assert!(!f["tags"].as_array().unwrap().is_empty(), "{f}");
+        }
+        assert!(SCRIPT.contains("chips taxonomy"));
     }
 
     #[test]

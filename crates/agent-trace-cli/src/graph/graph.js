@@ -640,6 +640,14 @@
     const more = document.createElement("div");
     more.className = "desc";
     more.append(text("div", f.description));
+    const tags = Array.isArray(f.tags) ? f.tags.filter((t) => typeof t === "string") : [];
+    if (tags.length) {
+      // Taxonomy tags (OWASP LLM Top 10, MITRE ATLAS, custom): text only.
+      const chips = document.createElement("div");
+      chips.className = "chips taxonomy";
+      for (const t of tags) chips.append(text("span", t, "chip"));
+      more.append(chips);
+    }
     if (f.remediation) more.append(text("div", "Remediation: " + f.remediation, "remedy"));
     const evidence = (f.evidence_event_ids || []).filter((id) => byId.has(id));
     if (evidence.length) more.append(linkList(evidence));

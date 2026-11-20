@@ -79,6 +79,7 @@ Why these classes:
 | `title` | `finding_info.title`, `finding_info.analytic.name` |
 | `description` | `finding_info.desc` |
 | `rule_id` | `finding_info.analytic.uid`, `finding_info.types[0]`; `finding_info.analytic.type_id` = 1 Rule |
+| `tags` (OWASP LLM Top 10, MITRE ATLAS) | `finding_info.types[1..]`, `unmapped.tags` (left out when empty) |
 | `rule_version` | `finding_info.analytic.version` |
 | `created_at` | `time`, `finding_info.created_time` |
 | first and last evidence event | `finding_info.first_seen_time`, `finding_info.last_seen_time` |
@@ -181,6 +182,7 @@ document. The file ends with a newline, as `_bulk` requires.
 | `event.id` | finding or event ID |
 | `event.dataset`, `event.module`, `event.provider` | `agent_trace.ocsf`, `agent_trace`, `agent-trace` |
 | `rule.id`, `rule.name`, `rule.description`, `rule.version`, `rule.ruleset` | findings: rule ID, title, description, rule version, `agent-trace` |
+| `tags` | findings: taxonomy tags (`LLM01:2025`, `AML.T0051.001`, …), left out when empty |
 | `observer.vendor`, `observer.product`, `observer.version` | `agent-trace`, `agent-trace`, agent-trace version |
 | `labels.trace_id`, `labels.execution_mode` | trace ID, `live` or `simulated` |
 | `related.hosts` | destination hosts |

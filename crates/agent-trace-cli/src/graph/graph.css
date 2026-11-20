@@ -155,6 +155,7 @@ svg.far .node text { display: none; }
 .taint { color: var(--blocked); font-size: 12px; font-weight: 600; margin: 6px 0 4px; }
 .remedy { margin-top: 4px; color: var(--fg); }
 .finding .links { margin-top: 6px; }
+.finding .chips.taxonomy { margin: 6px 0 0; }
 aside h2 .linkbtn { margin-left: 8px; text-transform: none; letter-spacing: 0; font-size: 11px; padding: 0 6px; }
 #event-section { scroll-margin-top: 0; }
 

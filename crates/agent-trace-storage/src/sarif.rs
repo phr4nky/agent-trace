@@ -9,7 +9,9 @@
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
 
-use agent_trace_core::{Analyzer, Event, EventKind, Finding, Redactor, Severity, TraceRecord};
+use agent_trace_core::{
+    Analyzer, Event, EventKind, Finding, Redactor, Severity, TraceRecord, taxonomy,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -104,10 +106,28 @@ pub fn sarif_log(traces: &[SarifTrace<'_>], analyzer: &Analyzer) -> Value {
     let rules: Vec<_> = analyzer.rules().collect();
     let rule_index: HashMap<&str, usize> =
         rules.iter().enumerate().map(|(i, r)| (r.id(), i)).collect();
+    // Tags of a finding: its own, else those of its rule (findings from older versions).
+    let rule_tags: HashMap<&str, Vec<String>> = rules.iter().map(|r| (r.id(), r.tags())).collect();
+    let finding_tags = |f: &Finding| -> Vec<String> {
+        let tags = if f.tags.is_empty() {
+            match rule_tags.get(f.rule_id.as_str()) {
+                Some(tags) => tags.clone(),
+                None => taxonomy::builtin_tags(&f.rule_id)
+                    .iter()
+                    .map(|t| (*t).to_owned())
+                    .collect(),
+            }
+        } else {
+            f.tags.clone()
+        };
+        tags.iter().map(|t| redactor.scrub(t)).collect()
+    };
     let rule_defs: Vec<Value> = rules
         .iter()
         .map(|r| {
             let severity = r.default_severity();
+            let mut tags = vec!["security".to_owned(), "ai-agent".to_owned()];
+            tags.extend(r.tags().into_iter().map(|t| redactor.scrub(&t)));
             json!({
                 "id": r.id(),
                 "name": r.title(),
@@ -116,7 +136,7 @@ pub fn sarif_log(traces: &[SarifTrace<'_>], analyzer: &Analyzer) -> Value {
                 "helpUri": "https://github.com/phr4nky/agent-trace#detection-rules",
                 "defaultConfiguration": { "level": level(severity) },
                 "properties": {
-                    "tags": ["security", "ai-agent"],
+                    "tags": tags,
                     "precision": "medium",
                     "security-severity": security_severity(severity),
                     "rule_version": r.version(),
@@ -211,6 +231,10 @@ pub fn sarif_log(traces: &[SarifTrace<'_>], analyzer: &Analyzer) -> Value {
                     "remediation": redactor.scrub(&f.remediation),
                 }
             });
+            let tags = finding_tags(f);
+            if !tags.is_empty() {
+                result["properties"]["tags"] = json!(tags);
+            }
             if let Some(i) = rule_index.get(f.rule_id.as_str()) {
                 result["ruleIndex"] = json!(i);
             }
@@ -347,6 +371,49 @@ mod tests {
         let idx = at002["ruleIndex"].as_u64().unwrap() as usize;
         assert_eq!(run["tool"]["driver"]["rules"][idx]["id"], "AT-002");
         assert_eq!(at002["properties"]["attempt_status"], "blocked");
+        let rule_tags = &run["tool"]["driver"]["rules"][idx]["properties"]["tags"];
+        assert_eq!(
+            rule_tags,
+            &json!([
+                "security",
+                "ai-agent",
+                "LLM01:2025",
+                "LLM06:2025",
+                "AML.T0053"
+            ])
+        );
+        assert_eq!(
+            at002["properties"]["tags"],
+            json!(["LLM01:2025", "LLM06:2025", "AML.T0053"])
+        );
+        for rule in run["tool"]["driver"]["rules"].as_array().unwrap() {
+            let tags = rule["properties"]["tags"].as_array().unwrap();
+            assert_eq!(tags[0], "security", "{}", rule["id"]);
+            assert!(tags.len() > 2, "{} has taxonomy tags", rule["id"]);
+        }
+    }
+
+    #[test]
+    fn findings_without_tags_get_the_rule_tags() {
+        let (record, mut findings) = sample(false);
+        for f in &mut findings {
+            f.tags.clear();
+        }
+        let log = sarif_log(
+            &[SarifTrace {
+                artifact_uri: "traces/x.jsonl",
+                record: &record,
+                findings: &findings,
+                event_lines: None,
+            }],
+            &Analyzer::default(),
+        );
+        let results = log["runs"][0]["results"].as_array().unwrap();
+        let at001 = results.iter().find(|r| r["ruleId"] == "AT-001").unwrap();
+        assert_eq!(
+            at001["properties"]["tags"],
+            json!(["LLM01:2025", "AML.T0051.001"])
+        );
     }
 
     #[test]

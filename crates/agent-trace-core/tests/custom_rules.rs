@@ -215,3 +215,53 @@ fn invalid_rules_are_rejected() {
         );
     }
 }
+
+#[test]
+fn custom_rule_tags_parse_and_reach_findings() {
+    let text =
+        format!("{PIPE_TO_SHELL}\ntags = [\"LLM06:2025\", \"AML.T0053\", \"CORP-supply-chain\"]\n");
+    let r = rule(&text).unwrap();
+    assert_eq!(
+        agent_trace_core::Rule::tags(&r),
+        ["LLM06:2025", "AML.T0053", "CORP-supply-chain"]
+    );
+    let analyzer = Analyzer::default().with_rule(Box::new(r));
+    let rec = session(false);
+    let findings = analyzer.analyze(&rec, rec.trace.created_at);
+    let corp: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "CORP-001")
+        .collect();
+    assert!(!corp.is_empty());
+    for f in corp {
+        assert_eq!(f.tags, ["LLM06:2025", "AML.T0053", "CORP-supply-chain"]);
+    }
+    // Without `tags`, a custom rule has none; built-in findings keep theirs.
+    let plain = Analyzer::default().with_rule(Box::new(rule(PIPE_TO_SHELL).unwrap()));
+    for f in plain.analyze(&rec, rec.trace.created_at) {
+        assert_eq!(f.tags.is_empty(), f.rule_id == "CORP-001", "{}", f.rule_id);
+    }
+}
+
+#[test]
+fn invalid_custom_rule_tags_are_rejected() {
+    let base = "id = \"CORP-1\"\ntitle = \"x\"\nseverity = \"high\"\n";
+    let long = "x".repeat(65);
+    let many: Vec<String> = (0..33).map(|i| format!("\"t{i}\"")).collect();
+    for (tags, why) in [
+        ("[\"\"]".to_owned(), "empty"),
+        ("[\" LLM01:2025\"]".to_owned(), "whitespace"),
+        ("[\"a\\u001bb\"]".to_owned(), "control"),
+        ("[\"a\\nb\"]".to_owned(), "control"),
+        (format!("[\"{long}\"]"), "longer"),
+        ("[\"LLM01:2025\", \"LLM01:2025\"]".to_owned(), "duplicate"),
+        (format!("[{}]", many.join(", ")), "more than"),
+        ("\"LLM01:2025\"".to_owned(), "sequence"),
+    ] {
+        let text = format!("{base}tags = {tags}\n");
+        let err = rule(&text)
+            .err()
+            .unwrap_or_else(|| panic!("accepted: {text}"));
+        assert!(err.contains(why), "{why}: {err}");
+    }
+}
