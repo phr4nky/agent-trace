@@ -40,14 +40,14 @@ No Rust toolchain is required on the agent if you use the release binary.
 **Option A: release binary (recommended).** Download it once per workspace and keep it as a cache:
 
 ```bash
-curl -fsSL "https://github.com/phr4nky/agent-trace/releases/download/v1.5.0/agent-trace-v1.5.0-x86_64-unknown-linux-gnu.tar.gz" \
+curl -fsSL "https://github.com/phr4nky/agent-trace/releases/download/v1.6.0/agent-trace-v1.6.0-x86_64-unknown-linux-gnu.tar.gz" \
   | tar -xz -C .agent-trace/bin --strip-components=1
 ```
 
 **Option B: cargo.** Use this when the agent already has Rust:
 
 ```bash
-cargo install --locked --git https://github.com/phr4nky/agent-trace --tag v1.5.0 agent-trace-cli
+cargo install --locked --git https://github.com/phr4nky/agent-trace --tag v1.6.0 agent-trace-cli
 ```
 
 **Option C: Docker agent.** Run the pipeline in a container that has `curl`, then use option A:
@@ -130,12 +130,14 @@ The example Jenkinsfile has a parameter for this:
 
 | `--fail-on` | Fails on |
 |---|---|
-| `high` (recommended) | Trust-boundary crossings (AT-002), cross-agent taint (AT-006), exfiltration of sensitive data (AT-003) |
+| `critical` | A canary token in a tool call that was not blocked (AT-007), custom rules with `severity = "critical"` |
+| `high` (recommended) | Also trust-boundary crossings (AT-002), cross-agent taint (AT-006), exfiltration of sensitive data (AT-003), a blocked canary call (AT-007) and a changed MCP tool definition (AT-008) |
 | `medium` | Also injection-like text in untrusted content (AT-001), authority spoofing (AT-005) and policy denials (AT-004) |
 | `low` | Everything |
 
-`critical` is accepted as well, but no built-in rule in v1.5.0 raises a critical finding, so a `critical`
-gate only fails on a custom rule with `severity = "critical"` (see [rules.md](rules.md)).
+A `critical` gate is narrow: since v1.6.0 the only built-in critical finding is a canary token that
+reached a tool call without being blocked (AT-007, see [canaries.md](canaries.md)); custom rules can
+raise one with `severity = "critical"` (see [rules.md](rules.md)).
 
 ## 4. Evidence in the build
 

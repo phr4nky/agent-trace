@@ -8,6 +8,14 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-20
+
+A team server with a web UI that collects the traces of many machines and shows each with its
+causal graph. Decoy secrets that turn a leak into proof, MCP tools that cannot change behind your
+back, a human in the loop instead of a hard block, tools scoped to the task, known attacks as a
+regression suite, and findings that fit your security process: OWASP and MITRE ATLAS tags, SIEM
+exports and an evidence report for record-keeping.
+
 ### Added
 
 - **Team server and web UI** (`agent-trace-server`, `ui/`, `docker-compose.yml`): collects the
@@ -30,12 +38,6 @@ The section of a version is used as the release notes of its GitHub release.
   first; https only (plain http to loopback), no redirects. `<data dir>/ship/` remembers per
   trace the last event and status the server confirmed; a trace is sent again when it grows or
   its status changes, and a server with another state says where to continue.
-- Library: `agent_trace_storage::ingest` (`IngestBatch`, `IngestReply`, `ingest`) and the sources
-  of a server database (`Store::{add_source, sources, source_by_token_hash, remove_source,
-  touch_source, trace_source, list_traces_of_source}`, `Source`, `SourceSummary`,
-  `TraceSource::Received`, `StorageError::DuplicateSource`; schema migration 3). The causal graph
-  page moved from the CLI to `agent_trace_storage::graph::render`. `agent_trace_net::ship`
-  (`ShipClient`, `ShipError`).
 - **Ask mode** (`--mode ask`, `mode = "ask"` in `[proxy]` and `[hooks]`): a middle ground
   between observe and enforce. Calls denied by a session heuristic (a privileged call after
   untrusted content, an outbound destination that is not allowlisted) are put to a human
@@ -55,8 +57,6 @@ The section of a version is used as the release notes of its GitHub release.
   `would_deny` in observe mode; the proxy also hides them from `tools/list`. An unknown profile
   name is an error. The active profile is recorded in the proxy's connection event, the hook
   session's metadata and each decision.
-- `PolicyOutcome` has a `class` (`hard` or `askable`) that says whether a denial may be put to
-  a human; it is serialized only for askable denials, so existing JSON is unchanged.
 - **Attack library** (`examples/attack-library`): recordings of four published agent attacks,
   shipped as a `replay` suite, to check a model or prompt change against known attacks: the
   GitHub MCP issue injection (Invariant Labs), the Supabase MCP support-ticket exfiltration
@@ -156,6 +156,32 @@ The section of a version is used as the release notes of its GitHub release.
   The `[hooks]` table is now read on its own in that case, and PreToolUse calls are denied
   (exit 2). The reason Claude sees does not repeat a configuration error, which may name
   canaries. A file that is not valid TOML still fails open, as it cannot say `on_error`.
+
+### Library
+
+- `agent_trace_storage::ingest` (`IngestBatch`, `IngestReply`, `ingest`) and the sources
+  of a server database (`Store::{add_source, sources, source_by_token_hash, remove_source,
+  touch_source, trace_source, list_traces_of_source}`, `Source`, `SourceSummary`,
+  `TraceSource::Received`, `StorageError::DuplicateSource`; schema migration 3). The causal graph
+  page moved from the CLI to `agent_trace_storage::graph::render`. `agent_trace_net::ship`
+  (`ShipClient`, `ShipError`).
+- `Finding::tags` (taxonomy tags; `Finding::with_default_tags` fills them for findings of
+  built-in rules) and `Rule::tags`, which defaults to the central mapping in
+  `agent_trace_core::taxonomy` (`builtin_tags`, `lookup`, `validate_tag`).
+- `PolicyOutcome::class` (`DenialClass::Hard` or `Askable`) says whether a denial may be put to
+  a human; it is serialized only for askable denials, so existing JSON is unchanged. Also
+  `PolicyOutcome::{allow, deny, askable, is_askable}`, `Decision::Ask`,
+  `ToolPolicy::evaluate_scoped`, `ToolProfile`, `ProfileConfig`, and in `agent_trace_mcp`
+  `ProxyMode::Ask`, `ProxyMode::gates`, `Approval` and `ask_user`.
+- Canaries: `agent_trace_core::canary` (`Canary`, `CanaryConfig`, `resolve`, `configure`,
+  `find_in_arguments`, …) and `CanaryLeakRule` (AT-007). Tool pins: `agent_trace_mcp::pins`
+  (`PinStore`, `fingerprint`, `check`) and `ToolPinRule` (AT-008) with the `TOOL_PINS_*` keys.
+- `agent_trace_storage::ocsf` (`ocsf_events`, `write_siem`, `SiemFormat`) and
+  `agent_trace_storage::otlp::{read_otlp_all, span_ids}`.
+- Source changes for Rust users: `Finding`, `PolicyOutcome` and `ProxyConfig` (`pins`, `profile`,
+  `ask_timeout`) have new public fields, so struct literals need them (build a `ProxyConfig` from
+  `ProxyConfig::new`); `Decision` and `ProxyMode` have a new variant `Ask` for exhaustive
+  matches.
 
 ## [1.5.0] - 2026-11-17
 
@@ -450,7 +476,8 @@ First release.
 - CLI commands `demo`, `trace`, `analyze --fail-on`, `explore`, `export` and `import`.
 - CI examples for GitHub Actions, GitLab CI and Jenkins.
 
-[Unreleased]: https://github.com/phr4nky/agent-trace/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/phr4nky/agent-trace/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/phr4nky/agent-trace/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/phr4nky/agent-trace/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/phr4nky/agent-trace/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/phr4nky/agent-trace/compare/v1.2.0...v1.3.0
