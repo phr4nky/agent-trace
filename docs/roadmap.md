@@ -1,5 +1,55 @@
 # Roadmap
 
+## Next
+
+Proposals, not commitments; the numbers are for discussion, not an order.
+
+**Team server and web UI**
+
+1. Login and roles: OIDC/SSO for the web UI and the read API, roles that decide who sees which
+   sources; replaces `--allow-unauthenticated-reads`
+2. Server in the release: `agent-trace-server` as a binary and a signed container image (GHCR)
+   in every release, not only from source
+3. Live view by push: server-sent events instead of polling every four seconds, so a running
+   session grows as it happens
+4. Search and filters across all traces: by rule, severity, tool, destination host and time,
+   over all sources
+5. Alerts: webhook, Slack or mail for new findings from a chosen severity, with a link to the
+   graph
+6. Signed batches: the recorder signs every batch with Ed25519 and the server verifies it, so the
+   evidence chain runs unbroken from the machine to the database
+7. Rate limits and quotas per source, against a faulty or compromised recorder
+8. Paging of very large traces in the graph: sections and loading on demand for sessions with
+   tens of thousands of events
+
+**Recording**
+
+9. More agent hooks: adapters for Codex CLI, Gemini CLI and Cursor, like the Claude Code hooks
+10. OTLP live ingest: the server accepts OTLP/HTTP directly, so LangGraph, OpenAI Agents or
+    Semantic Kernel apps send traces without export files
+11. Clean session ends: a hook trace without SessionEnd is closed as `abandoned` after an idle
+    timeout instead of staying `running`
+12. Taint across fork and resume: a resumed or forked Claude Code session inherits the trust state
+    of the session it continues
+
+**Detection and policy**
+
+13. Data-flow rules for content: detect when content from confidential sources (files, database
+    tools) appears in outbound calls, by fingerprints, not only by origin
+14. Policy tests: `agent-trace policy test`, unit tests for `agent-trace.toml` (given events,
+    expected decision) for CI
+15. Trace diff: `agent-trace diff A B` shows two sessions or two model versions side by side, next
+    to `replay`
+16. A growing attack library: newly published attacks (for example rules-file backdoors and MCP
+    sampling abuse) as replay cases, with a regular update routine
+
+**Operations and evidence**
+
+17. Retention on the server: retention and deletion per source (deadlines, client addresses as
+    personal data under the GDPR), export as signed JSONL
+18. Evidence report from the server: `agent-trace evidence` over all sources of a period, straight
+    from the server database
+
 ## v1.6.0
 
 - Team server and web UI: `agent-trace ship` sends recorded traces (store and forward, a token
