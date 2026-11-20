@@ -207,9 +207,15 @@ enum Command {
         #[arg(long)]
         name: Option<String>,
         /// observe: record only (default). enforce: answer denied calls with a tool error
-        /// instead of forwarding them. Overrides `mode` in agent-trace.toml.
+        /// instead of forwarding them. ask: like enforce, but ask the user (MCP elicitation)
+        /// about calls after untrusted content or to non-allowlisted destinations.
+        /// Overrides `mode` in agent-trace.toml.
         #[arg(long, value_enum)]
         mode: Option<ProxyModeArg>,
+        /// Task profile from [profiles.NAME] in agent-trace.toml: only its tools are allowed
+        /// (and listed, in enforce and ask mode). Default: $AGENT_TRACE_PROFILE.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
         /// Seconds to wait for the upstream server's answer to a tool call (default 300).
         #[arg(long, value_name = "SECONDS")]
         call_timeout: Option<u64>,
@@ -241,9 +247,15 @@ enum Command {
     /// `agent-trace hook --print-settings` prints.
     Hook {
         /// observe: record only (default). enforce: deny tool calls the policy denies.
-        /// Overrides `mode` in the [hooks] table of agent-trace.toml.
+        /// ask: like enforce, but let Claude Code ask the user about calls after untrusted
+        /// content or to non-allowlisted destinations. Overrides `mode` in the [hooks] table
+        /// of agent-trace.toml.
         #[arg(long, value_enum)]
         mode: Option<ProxyModeArg>,
+        /// Task profile from [profiles.NAME] in agent-trace.toml: only its tools are allowed.
+        /// Default: $AGENT_TRACE_PROFILE.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
         /// Print the `hooks` block for Claude Code's settings.json and exit.
         #[arg(long)]
         print_settings: bool,
@@ -377,6 +389,7 @@ impl ModelFlags {
 pub enum ProxyModeArg {
     Observe,
     Enforce,
+    Ask,
 }
 
 impl ProxyModeArg {
@@ -384,6 +397,7 @@ impl ProxyModeArg {
         match self {
             Self::Observe => agent_trace_mcp::ProxyMode::Observe,
             Self::Enforce => agent_trace_mcp::ProxyMode::Enforce,
+            Self::Ask => agent_trace_mcp::ProxyMode::Ask,
         }
     }
 }
@@ -540,17 +554,20 @@ fn main() -> ExitCode {
         Command::LabServer { documents } => commands::lab_server(&documents).map(|_| EXIT_OK),
         Command::Hook {
             mode,
+            profile,
             print_settings,
         } => commands::hook::run(
             &ctx,
             commands::hook::HookArgs {
                 mode: mode.map(ProxyModeArg::into_mode),
+                profile,
                 print_settings,
             },
         ),
         Command::Proxy {
             name,
             mode,
+            profile,
             call_timeout,
             url,
             bearer_token_env,
@@ -563,6 +580,7 @@ fn main() -> ExitCode {
             commands::proxy::ProxyArgs {
                 name,
                 mode: mode.map(ProxyModeArg::into_mode),
+                profile,
                 call_timeout_secs: call_timeout,
                 command,
                 url,

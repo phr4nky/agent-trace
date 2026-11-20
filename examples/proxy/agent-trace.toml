@@ -17,7 +17,8 @@ privileged = [
 ]
 
 [proxy]
-# "observe" records only; "enforce" answers denied calls with a tool error.
+# "observe" records only; "enforce" answers denied calls with a tool error; "ask" asks the
+# user (MCP elicitation) and forwards only approved calls.
 mode = "enforce"
 # Results of these tools are written by strangers. A privileged call after one of them is
 # denied in enforce mode. Reading your own files does not taint the session.
@@ -29,3 +30,8 @@ taint_sources = [
     "get_pull_request*",
     "list_pull_requests",
 ]
+
+# A task profile for looking at issues: `--profile read-only` hides and denies every other
+# tool, so the session cannot open a pull request at all.
+[profiles.read-only]
+tools = ["get_*", "list_*", "search_*"]

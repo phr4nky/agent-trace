@@ -9,10 +9,19 @@
 privileged = ["mcp__github__create_*", "mcp__github__push_files", "mcp__github__merge_*"]
 
 [hooks]
-# "observe" records only; "enforce" denies privileged tool calls after untrusted content.
+# "observe" records only; "enforce" denies privileged tool calls after untrusted content;
+# "ask" lets Claude Code ask you about them instead.
 mode = "enforce"
 # Content from outside the machine. Add "Read" when working in repositories you do not trust.
 taint_sources = ["WebFetch", "WebSearch", "mcp__*"]
 # "allow": a broken recorder never blocks Claude Code. "deny": tool calls are denied while
-# recording fails (enforce mode only).
+# recording fails (enforce and ask mode only).
 on_error = "allow"
+
+# A task profile: start Claude Code with AGENT_TRACE_PROFILE=read-only (or add
+# `--profile read-only` to the hook command) and every other tool is denied.
+[profiles.read-only]
+tools = [
+    "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "TodoWrite", "Task",
+    "mcp__github__get_*", "mcp__github__list_*", "mcp__github__search_*",
+]

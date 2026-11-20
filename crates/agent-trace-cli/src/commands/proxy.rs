@@ -27,6 +27,8 @@ const SESSION_NAMESPACE: Uuid = Uuid::from_u128(0x0b8e_51c4_7a2d_4f60_9e13_c5a7_
 pub struct ProxyArgs {
     pub name: Option<String>,
     pub mode: Option<ProxyMode>,
+    /// Task profile (`--profile`; else `$AGENT_TRACE_PROFILE`).
+    pub profile: Option<String>,
     pub call_timeout_secs: Option<u64>,
     /// Upstream server command and its arguments (stdio).
     pub command: Vec<String>,
@@ -123,6 +125,7 @@ pub fn run(ctx: &Context, args: ProxyArgs) -> anyhow::Result<u8> {
     let loaded = ctx.config()?;
     loaded.announce();
     let section = &loaded.config.proxy;
+    let profile = loaded.profile(args.profile.as_deref())?;
 
     // The upstream: a URL or a command, never both (clap enforces it).
     let http = match &args.url {
@@ -184,12 +187,22 @@ pub fn run(ctx: &Context, args: ProxyArgs) -> anyhow::Result<u8> {
         } else {
             None
         },
+        profile,
+        ask_timeout: section
+            .ask_timeout_secs
+            .map(Duration::from_secs)
+            .unwrap_or(agent_trace_mcp::proxy::DEFAULT_ASK_TIMEOUT),
     };
     let timeout = args
         .call_timeout_secs
         .or(section.call_timeout_secs)
         .map(Duration::from_secs);
     let mode = config.mode;
+    let profile_note = config
+        .profile
+        .as_ref()
+        .map(|p| format!(", profile {}", p.name))
+        .unwrap_or_default();
 
     // The trace: shared by the proxies of one client session, or this proxy's own.
     let session = session_key(&args);
@@ -242,9 +255,10 @@ pub fn run(ctx: &Context, args: ProxyArgs) -> anyhow::Result<u8> {
         }
         let proxy = Proxy::new(upstream, trace.clone() as Arc<dyn TraceAccess>, config)?;
         eprintln!(
-            "agent-trace proxy: {} ({} mode), trace {}{}",
+            "agent-trace proxy: {} ({} mode{}), trace {}{}",
             term_safe(&name),
             mode.as_str(),
+            term_safe(&profile_note),
             trace_id,
             if session.is_some() {
                 " (shared by this client's proxies)"

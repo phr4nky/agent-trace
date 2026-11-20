@@ -21,27 +21,37 @@
 //! server's tool definitions with their pins before the first call and on every complete
 //! `tools/list`. Changed tools are reported (AT-008); in enforce mode they are hidden from
 //! `tools/list` and their calls are denied.
+//!
+//! Ask mode: a call the session heuristics would deny ([`DenialClass::Askable`]) is put to
+//! the user through MCP elicitation (`elicitation/create`) when the client announced that
+//! capability. The trace records the `ask` decision and then how it was resolved
+//! ([`HUMAN_APPROVAL_KEY`]). Without an accepted answer the call is denied (fail closed).
+//!
+//! Profiles ([`ToolProfile`]): a tool outside the active profile is denied in enforce and
+//! ask mode (never asked) and hidden from `tools/list`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use agent_trace_core::rules::{
-    LINK_BASIS_KEY, LINK_BASIS_SESSION_CONTEXT, TAINT_SOURCE_KEY, TOOL_PINS_ACTION_BLOCKED,
-    TOOL_PINS_ACTION_KEY, TOOL_PINS_ACTION_OBSERVED, TOOL_PINS_ADDED_KEY, TOOL_PINS_CHANGED,
-    TOOL_PINS_CHANGED_KEY, TOOL_PINS_KEY,
+    HUMAN_APPROVAL_KEY, LINK_BASIS_KEY, LINK_BASIS_SESSION_CONTEXT, TAINT_SOURCE_KEY,
+    TOOL_PINS_ACTION_BLOCKED, TOOL_PINS_ACTION_KEY, TOOL_PINS_ACTION_OBSERVED, TOOL_PINS_ADDED_KEY,
+    TOOL_PINS_CHANGED, TOOL_PINS_CHANGED_KEY, TOOL_PINS_KEY,
 };
 use agent_trace_core::{
-    Decision, EventKind, EventSpec, Origin, PolicyOutcome, ToolPolicy, ToolState, TraceAccess,
-    TraceRecorder, TraceStatus, TrustLevel, glob_match,
+    Decision, DenialClass, EventKind, EventSpec, Origin, PolicyOutcome, Redactor, ToolPolicy,
+    ToolProfile, ToolState, TraceAccess, TraceRecorder, TraceStatus, TrustLevel, glob_match,
 };
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, GetPromptRequestParams,
-    GetPromptResponse, Implementation, ListPromptsResult, ListResourceTemplatesResult,
-    ListResourcesResult, ListToolsResult, PaginatedRequestParams, PromptsCapability,
-    ReadResourceRequestParams, ReadResourceResponse, ResourceContents, ResourcesCapability,
-    ServerCapabilities, ServerConfig, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ElicitRequestParams,
+    ElicitationAction, ElicitationSchema, GetPromptRequestParams, GetPromptResponse,
+    Implementation, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+    ListToolsResult, PaginatedRequestParams, PromptsCapability, ReadResourceRequestParams,
+    ReadResourceResponse, ResourceContents, ResourcesCapability, ServerCapabilities, ServerConfig,
+    Tool,
 };
-use rmcp::service::{NotificationContext, RequestContext};
+use rmcp::service::{ElicitationMode, NotificationContext, Peer, RequestContext};
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceError, ServiceExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -63,6 +73,10 @@ pub enum ProxyMode {
     Observe,
     /// Answer denied calls with a tool error; they never reach the upstream server.
     Enforce,
+    /// As enforce, but ask a human about calls denied by a session heuristic (a privileged
+    /// call after lower-trust content, a destination not on the allowlist). Hard denials
+    /// (canary tokens, tools outside the profile) are never asked.
+    Ask,
 }
 
 impl ProxyMode {
@@ -70,9 +84,18 @@ impl ProxyMode {
         match self {
             Self::Observe => "observe",
             Self::Enforce => "enforce",
+            Self::Ask => "ask",
         }
     }
+
+    /// Whether denials take effect (enforce and ask mode).
+    pub fn gates(self) -> bool {
+        self != Self::Observe
+    }
 }
+
+/// How long the proxy waits for the user's answer to an approval question by default.
+pub const DEFAULT_ASK_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Proxy settings.
 #[derive(Debug, Clone)]
@@ -88,6 +111,11 @@ pub struct ProxyConfig {
     pub endpoint: Option<String>,
     /// Where tool definitions are pinned; `None` turns pinning off.
     pub pins: Option<PinStore>,
+    /// The active task profile: tools outside it are denied (hard) and hidden in enforce and
+    /// ask mode, recorded as "would deny" in observe mode.
+    pub profile: Option<ToolProfile>,
+    /// How long to wait for the user's answer in ask mode (then the call is denied).
+    pub ask_timeout: Duration,
 }
 
 impl ProxyConfig {
@@ -99,6 +127,8 @@ impl ProxyConfig {
             taint_sources: vec!["*".into()],
             endpoint: None,
             pins: None,
+            profile: None,
+            ask_timeout: DEFAULT_ASK_TIMEOUT,
         }
     }
 
@@ -114,25 +144,158 @@ impl ProxyConfig {
         tainted: &[(Uuid, String)],
     ) -> PolicyOutcome {
         let sources: Vec<&str> = tainted.iter().map(|(_, s)| s.as_str()).collect();
-        self.policy.evaluate_in_session(tool, arguments, &sources)
+        self.policy
+            .evaluate_scoped(tool, arguments, &sources, self.profile.as_ref())
+    }
+
+    /// Whether `tools/list` shows `tool`: everything in observe mode, otherwise only the
+    /// tools of the active profile.
+    fn lists(&self, tool: &str) -> bool {
+        !self.mode.gates() || self.profile.as_ref().is_none_or(|p| p.allows(tool))
     }
 }
 
 /// Apply `mode` to a policy verdict: in observe mode a denial becomes an allow that records
-/// what would have been denied. Returns the effective outcome and the extra fields for the
-/// decision payload.
+/// what would have been denied; in ask mode an askable denial becomes [`Decision::Ask`].
+/// Hard denials stay denials in enforce and ask mode. Returns the effective outcome and the
+/// extra fields for the decision payload.
 pub fn apply_mode(mode: ProxyMode, verdict: PolicyOutcome) -> (PolicyOutcome, Map<String, Value>) {
     let mut extra = Map::new();
     extra.insert("mode".into(), mode.as_str().into());
     if mode == ProxyMode::Observe && verdict.decision == Decision::Deny {
         extra.insert("would_deny".into(), true.into());
+        let outcome = PolicyOutcome::allow(format!(
+            "observe mode, not enforced; would deny: {}",
+            verdict.reason
+        ));
+        return (outcome, extra);
+    }
+    if mode == ProxyMode::Ask && verdict.is_askable() {
         let outcome = PolicyOutcome {
-            decision: Decision::Allow,
-            reason: format!("observe mode, not enforced; would deny: {}", verdict.reason),
+            decision: Decision::Ask,
+            reason: format!("approval required: {}", verdict.reason),
+            class: DenialClass::Askable,
         };
         return (outcome, extra);
     }
     (verdict, extra)
+}
+
+/// How an `ask` decision of the proxy was resolved (the [`HUMAN_APPROVAL_KEY`] value).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Approval {
+    /// The user approved the call.
+    Accepted,
+    /// The user answered no (declined, or accepted the form without approving).
+    Declined,
+    /// The user dismissed the question.
+    Cancelled,
+    /// No answer within the ask timeout.
+    Timeout,
+    /// The client did not announce form elicitation in `initialize`.
+    Unsupported,
+    /// The elicitation request failed.
+    Error(String),
+}
+
+impl Approval {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Declined => "declined",
+            Self::Cancelled => "cancelled",
+            Self::Timeout => "timeout",
+            Self::Unsupported => "unsupported",
+            Self::Error(_) => "error",
+        }
+    }
+
+    fn explain(&self) -> String {
+        match self {
+            Self::Accepted => "approved by the user".into(),
+            Self::Declined => "the user declined".into(),
+            Self::Cancelled => "the user cancelled the question".into(),
+            Self::Timeout => "no answer from the user in time".into(),
+            Self::Unsupported => {
+                "the MCP client does not support elicitation, so no one could be asked".into()
+            }
+            Self::Error(e) => format!("the approval question failed ({e})"),
+        }
+    }
+}
+
+/// Name of the yes/no field of the approval form.
+const APPROVE_FIELD: &str = "approve";
+/// At most this many characters of the arguments are shown in the approval question.
+const MAX_ASK_ARGUMENTS: usize = 1000;
+
+/// Ask the user through MCP elicitation whether `tool` may run. Only an accepted form with
+/// `approve = true` approves; anything else is a refusal.
+pub async fn ask_user(
+    peer: &Peer<RoleServer>,
+    server: &str,
+    tool: &str,
+    arguments: &Map<String, Value>,
+    reason: &str,
+    timeout: Duration,
+) -> Approval {
+    if !peer
+        .supported_elicitation_modes()
+        .contains(&ElicitationMode::Form)
+    {
+        return Approval::Unsupported;
+    }
+    let mut args = Redactor::new().scrub(&Value::Object(arguments.clone()).to_string());
+    if args.chars().count() > MAX_ASK_ARGUMENTS {
+        args = args.chars().take(MAX_ASK_ARGUMENTS).collect::<String>() + "…";
+    }
+    let message = format!(
+        "agent-trace: allow the tool call `{tool}` on MCP server \"{server}\"?\n\
+         Why you are asked: {reason}\n\
+         Arguments: {args}"
+    );
+    let schema = match ElicitationSchema::builder()
+        .required_bool_with(APPROVE_FIELD, |b| {
+            b.title("Allow this call")
+                .description("Yes runs the call once; no blocks it.")
+                .with_default(false)
+        })
+        .build()
+    {
+        Ok(schema) => schema,
+        Err(e) => return Approval::Error(e.to_owned()),
+    };
+    let request = ElicitRequestParams::FormElicitationParams {
+        meta: None,
+        message,
+        requested_schema: schema,
+    };
+    match peer
+        .create_elicitation_with_timeout(request, Some(timeout))
+        .await
+    {
+        Ok(result) => match result.action {
+            ElicitationAction::Accept => {
+                let approved = result
+                    .content
+                    .as_ref()
+                    .and_then(|c| c.get(APPROVE_FIELD))
+                    .and_then(Value::as_bool)
+                    == Some(true);
+                if approved {
+                    Approval::Accepted
+                } else {
+                    Approval::Declined
+                }
+            }
+            ElicitationAction::Decline => Approval::Declined,
+            ElicitationAction::Cancel => Approval::Cancelled,
+            // A future action is not an approval.
+            _ => Approval::Declined,
+        },
+        Err(ServiceError::Timeout { .. }) => Approval::Timeout,
+        Err(e) => Approval::Error(e.to_string()),
+    }
 }
 
 /// Trace metadata key: number of proxies currently connected to the trace. The trace is
@@ -249,6 +412,18 @@ impl Proxy {
         config: ProxyConfig,
     ) -> anyhow::Result<Self> {
         let mut connection = None;
+        let mut payload = json!({
+            "proxy": config.name,
+            "mode": config.mode.as_str(),
+            "upstream": upstream.server_name,
+            "upstream_version": upstream.server_version,
+            "endpoint": config.endpoint,
+            "taint_sources": config.taint_sources,
+            "policy": serde_json::to_value(&config.policy).unwrap_or(Value::Null),
+        });
+        if let Some(profile) = &config.profile {
+            payload["profile"] = json!({"name": profile.name, "tools": profile.tools});
+        }
         trace
             .with_recorder(&mut |rec| {
                 let main = main_started(rec);
@@ -263,15 +438,7 @@ impl Proxy {
                                 TrustLevel::Trusted,
                                 "mcp-server-connected",
                             )
-                            .payload(json!({
-                                "proxy": config.name,
-                                "mode": config.mode.as_str(),
-                                "upstream": upstream.server_name,
-                                "upstream_version": upstream.server_version,
-                                "endpoint": config.endpoint,
-                                "taint_sources": config.taint_sources,
-                                "policy": serde_json::to_value(&config.policy).unwrap_or(Value::Null),
-                            }))
+                            .payload(payload.clone())
                             .parent(main)
                             .meta("proxy", config.name.clone()),
                         ),
@@ -513,7 +680,7 @@ impl Proxy {
             !check.added.is_empty() || (!changed.is_empty() && new_situation)
         };
         let added: Vec<String> = check.added.iter().map(|(t, _)| t.clone()).collect();
-        let action = if config.mode == ProxyMode::Enforce {
+        let action = if config.mode.gates() {
             TOOL_PINS_ACTION_BLOCKED
         } else {
             TOOL_PINS_ACTION_OBSERVED
@@ -581,6 +748,7 @@ impl Proxy {
     async fn proxied_call(
         &self,
         request: CallToolRequestParams,
+        peer: &Peer<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let upstream = &self.inner.upstream;
         let config = &self.inner.config;
@@ -592,14 +760,15 @@ impl Proxy {
         // Request, decision and (if allowed) execution, in one access to the trace.
         let gate = self.with(|rec, connection| {
             let tainted = tainted(rec);
+            // A changed tool definition is a hard denial: it is never put to the user.
             let verdict = match pin_denial {
-                Some(reason) => PolicyOutcome {
-                    decision: Decision::Deny,
-                    reason,
-                },
+                Some(reason) => PolicyOutcome::deny(reason),
                 None => config.evaluate(&tool, &arguments, &tainted),
             };
-            let (effective, extra) = apply_mode(config.mode, verdict);
+            let (effective, mut extra) = apply_mode(config.mode, verdict);
+            if let Some(profile) = &config.profile {
+                extra.insert("profile".into(), profile.name.clone().into());
+            }
             let start = tainted.len().saturating_sub(MAX_SESSION_CONTEXT);
             let context: Vec<Uuid> = tainted[start..].iter().map(|(id, _)| *id).collect();
             let mut spec = upstream
@@ -636,19 +805,51 @@ impl Proxy {
                 .then(|| upstream.record_executed(rec, &call, &tool));
             (call, effective, executed)
         });
+        let blocked = |reason: &str| {
+            Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "BLOCKED by agent-trace proxy policy: {reason}"
+            ))]))
+        };
         let (call, executed) = match gate {
             Ok((_, outcome, _)) if outcome.decision == Decision::Deny => {
-                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "BLOCKED by agent-trace proxy policy: {}",
-                    outcome.reason
-                ))]));
+                return blocked(&outcome.reason);
+            }
+            Ok((asked, outcome, _)) if outcome.decision == Decision::Ask => {
+                // The trace is not locked while the user thinks.
+                let approval = ask_user(
+                    peer,
+                    &config.name,
+                    &tool,
+                    &arguments,
+                    &outcome.reason,
+                    config.ask_timeout,
+                )
+                .await;
+                let resolved = self.with(|rec, _| {
+                    record_approval(rec, upstream, &asked, &tool, &outcome, &approval)
+                });
+                match resolved {
+                    Ok((call, Some(executed))) => (Some(call), Some(executed)),
+                    Ok((_, None)) => {
+                        return blocked(&format!("{}; {}", outcome.reason, approval.explain()));
+                    }
+                    Err(RecordError::Access(e)) => {
+                        // An approval that cannot be recorded is not forwarded.
+                        return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                            "BLOCKED: agent-trace could not record the approval of this call \
+                             ({e}); unrecorded calls are not forwarded in ask mode"
+                        ))]));
+                    }
+                    Err(e @ RecordError::Finished) => return Err(e.to_mcp()),
+                }
             }
             Ok((call, _, executed)) => (Some(call), executed),
-            Err(RecordError::Access(e)) if config.mode == ProxyMode::Enforce => {
+            Err(RecordError::Access(e)) if config.mode.gates() => {
                 // Without the session's history there is no decision: fail closed.
                 return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "BLOCKED: agent-trace could not check this call against the session \
-                     ({e}); in enforce mode unchecked calls are not forwarded"
+                     ({e}); in {} mode unchecked calls are not forwarded",
+                    config.mode.as_str()
                 ))]));
             }
             Err(RecordError::Access(e)) => {
@@ -684,6 +885,62 @@ impl Proxy {
             })
         })
     }
+}
+
+/// Record how the `ask` decision of `asked` was resolved: a second `tool_policy_decision`
+/// (allow or deny, with [`HUMAN_APPROVAL_KEY`]) caused by the first, and for an approved call
+/// its execution. Returns the call spec for the result and the execution, if any.
+fn record_approval(
+    rec: &mut TraceRecorder,
+    upstream: &McpSession,
+    asked: &CallSpec,
+    tool: &str,
+    outcome: &PolicyOutcome,
+    approval: &Approval,
+) -> (CallSpec, Option<Uuid>) {
+    let accepted = *approval == Approval::Accepted;
+    let decision = if accepted {
+        Decision::Allow
+    } else {
+        Decision::Deny
+    };
+    let mut payload = json!({
+        "tool": tool,
+        "decision": decision,
+        "reason": format!("{}; {}", outcome.reason, approval.explain()),
+        "outbound_request_sent": false,
+        "mode": ProxyMode::Ask.as_str(),
+        HUMAN_APPROVAL_KEY: approval.as_str(),
+    });
+    if let Approval::Error(e) = approval {
+        payload["approval_error"] = e.clone().into();
+    }
+    let decided = rec.record(
+        upstream.mcp_metadata(
+            EventSpec::new(
+                EventKind::ToolPolicyDecision,
+                Origin::Policy,
+                TrustLevel::Trusted,
+                tool,
+            )
+            .payload(payload)
+            .parent(asked.request_event)
+            .caused_by(asked.caused_by)
+            .tool_state(if accepted {
+                ToolState::PolicyDecision
+            } else {
+                ToolState::Blocked
+            }),
+        ),
+    );
+    let call = CallSpec {
+        request_event: asked.request_event,
+        caused_by: decided,
+        agent: None,
+        mock_tool: false,
+    };
+    let executed = accepted.then(|| upstream.record_executed(rec, &call, tool));
+    (call, executed)
 }
 
 fn upstream_error(e: ServiceError) -> ErrorData {
@@ -764,14 +1021,22 @@ impl ServerHandler for Proxy {
                 })
             })
             .collect();
-        self.observe(
-            "tools/list",
-            "tools/list",
-            json!({"method": "tools/list", "tools": tools}),
-            false,
-        );
-        if self.inner.config.mode == ProxyMode::Enforce {
-            // A changed definition never reaches the model in enforce mode.
+        let config = &self.inner.config;
+        let hidden: Vec<String> = result
+            .tools
+            .iter()
+            .filter(|t| !config.lists(&t.name))
+            .map(|t| t.name.to_string())
+            .collect();
+        let mut payload = json!({"method": "tools/list", "tools": tools});
+        if let Some(profile) = &config.profile {
+            payload["profile"] = profile.name.clone().into();
+            payload["hidden_by_profile"] = json!(hidden);
+        }
+        self.observe("tools/list", "tools/list", payload, false);
+        result.tools.retain(|t| config.lists(&t.name));
+        if config.mode.gates() {
+            // A changed definition never reaches the model in enforce or ask mode.
             let state = self.pin_state();
             result
                 .tools
@@ -783,9 +1048,11 @@ impl ServerHandler for Proxy {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        self.proxied_call(request).await.map(Into::into)
+        self.proxied_call(request, &context.peer)
+            .await
+            .map(Into::into)
     }
 
     async fn list_resources(

@@ -1,15 +1,16 @@
-//! `agent-trace.toml`: policy additions and proxy settings.
+//! `agent-trace.toml`: policy additions, proxy and hook settings, task profiles.
 //!
 //! Lookup order: `--config`, `$AGENT_TRACE_CONFIG`, `./agent-trace.toml`, then
 //! `<data dir>/agent-trace.toml`. An explicitly named file must exist; the implicit ones are
 //! optional. A file that exists but is invalid is an error, never silently ignored.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use agent_trace_core::canary::{self, CanaryConfig};
 use agent_trace_core::redact::{self, RedactionConfig};
 use agent_trace_core::rules::{CustomRule, CustomRuleConfig};
-use agent_trace_core::{Analyzer, PolicyConfig, ToolPolicy};
+use agent_trace_core::{Analyzer, PolicyConfig, ProfileConfig, ToolPolicy, ToolProfile};
 use agent_trace_mcp::ProxyMode;
 use anyhow::{Context as _, bail};
 use serde::Deserialize;
@@ -40,7 +41,14 @@ pub struct Config {
     /// Canary tokens (`[[canaries]]`): decoy secrets reported by AT-007.
     #[serde(default)]
     pub canaries: Vec<CanaryConfig>,
+    /// Task profiles (`[profiles.<name>]`): the tools a task may use, selected with
+    /// `--profile` or `$AGENT_TRACE_PROFILE`.
+    #[serde(default)]
+    pub profiles: BTreeMap<String, ProfileConfig>,
 }
+
+/// Environment variable that selects a profile when `--profile` is not given.
+pub const PROFILE_ENV: &str = "AGENT_TRACE_PROFILE";
 
 /// The `[retention]` table.
 #[derive(Debug, Default, Deserialize)]
@@ -59,7 +67,7 @@ pub enum OnError {
     /// Let the tool call proceed (fail open). The error is printed on stderr.
     #[default]
     Allow,
-    /// Deny tool calls while recording fails (fail closed; enforce mode only).
+    /// Deny tool calls while recording fails (fail closed; enforce and ask mode only).
     Deny,
 }
 
@@ -67,7 +75,7 @@ pub enum OnError {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HooksSection {
-    /// `observe` (default) or `enforce`.
+    /// `observe` (default), `enforce` or `ask`.
     pub mode: Option<ProxyMode>,
     /// Tools whose results count as untrusted session context
     /// (default: [`DEFAULT_HOOK_TAINT_SOURCES`]).
@@ -84,7 +92,7 @@ pub const DEFAULT_HOOK_TAINT_SOURCES: &[&str] = &["WebFetch", "WebSearch", "mcp_
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxySection {
-    /// `observe` (default) or `enforce`.
+    /// `observe` (default), `enforce` or `ask`.
     pub mode: Option<ProxyMode>,
     /// Sources whose content counts as untrusted session context (default: `["*"]`).
     pub taint_sources: Option<Vec<String>>,
@@ -92,6 +100,9 @@ pub struct ProxySection {
     pub call_timeout_secs: Option<u64>,
     /// Pin tool definitions per server and report changes (default: true).
     pub pin_tools: Option<bool>,
+    /// Ask mode: maximum seconds to wait for the user's answer (default 300); then the call
+    /// is denied.
+    pub ask_timeout_secs: Option<u64>,
 }
 
 /// A loaded configuration and the file it came from (`None` = built-in defaults).
@@ -118,6 +129,13 @@ impl Loaded {
         analyzer
     }
 
+    /// The task profile selected by `explicit` (`--profile`) or `$AGENT_TRACE_PROFILE`.
+    /// A name that is not defined in the configuration is an error.
+    pub fn profile(&self, explicit: Option<&str>) -> anyhow::Result<Option<ToolProfile>> {
+        let from_env = std::env::var(PROFILE_ENV).ok();
+        select_profile(&self.config.profiles, explicit, from_env.as_deref())
+    }
+
     /// Say on stderr which file changed the defaults, so a gate's result can be explained.
     pub fn announce(&self) {
         if let Some(path) = &self.path {
@@ -125,6 +143,33 @@ impl Loaded {
                 "config: {}",
                 crate::output::term_safe(&path.display().to_string())
             );
+        }
+    }
+}
+
+/// The profile named by `explicit`, else by the environment value (blank = none).
+fn select_profile(
+    profiles: &BTreeMap<String, ProfileConfig>,
+    explicit: Option<&str>,
+    from_env: Option<&str>,
+) -> anyhow::Result<Option<ToolProfile>> {
+    let (name, source) = match (explicit, from_env.map(str::trim).filter(|v| !v.is_empty())) {
+        (Some(name), _) => (name.trim(), "--profile"),
+        (None, Some(name)) => (name, PROFILE_ENV),
+        (None, None) => return Ok(None),
+    };
+    match profiles.get(name) {
+        Some(config) => Ok(Some(ToolProfile::new(name, config))),
+        None => {
+            let known: Vec<&str> = profiles.keys().map(String::as_str).collect();
+            bail!(
+                "unknown profile {name:?} (from {source}); defined profiles: {}",
+                if known.is_empty() {
+                    "none (add a [profiles.<name>] table to agent-trace.toml)".to_owned()
+                } else {
+                    known.join(", ")
+                }
+            )
         }
     }
 }
@@ -177,6 +222,14 @@ pub fn parse(text: &str) -> anyhow::Result<Config> {
     redact::validate_config(&config.redaction).map_err(anyhow::Error::msg)?;
     // Values from `env` are read here too, so a missing variable is reported by every command.
     canary::resolve(&config.canaries).map_err(anyhow::Error::msg)?;
+    for (name, profile) in &config.profiles {
+        if name.trim().is_empty() || name.trim() != name {
+            bail!("profile name {name:?} must not be blank or have surrounding spaces");
+        }
+        if profile.tools.iter().all(|t| t.trim().is_empty()) {
+            bail!("profile {name:?} allows no tools; list at least one in `tools`");
+        }
+    }
     let mut ids = std::collections::HashSet::new();
     for rule in &config.rules {
         CustomRule::new(rule.clone()).map_err(anyhow::Error::msg)?;
@@ -257,6 +310,54 @@ mod tests {
             "[[canaries]]\nname = \"x\"",
             "[[canaries]]\nname = \"x\"\nenv = \"AGENT_TRACE_TEST_UNSET_CANARY_VAR\"",
             "[[canaries]]\nname = \"x\"\nvalue = \"long-enough-value\"\nlabel = \"y\"",
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn profiles_are_parsed_and_selected() {
+        let c = parse(
+            r#"
+            [proxy]
+            mode = "ask"
+            ask_timeout_secs = 30
+
+            [hooks]
+            mode = "ask"
+
+            [profiles.read-only]
+            tools = ["Read", "Grep", "mcp__github__get_*"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(c.proxy.mode, Some(ProxyMode::Ask));
+        assert_eq!(c.hooks.mode, Some(ProxyMode::Ask));
+        assert_eq!(c.proxy.ask_timeout_secs, Some(30));
+        let p = select_profile(&c.profiles, Some("read-only"), None)
+            .unwrap()
+            .unwrap();
+        assert!(p.allows("mcp__github__get_issue"));
+        assert!(!p.allows("Bash"));
+        // The flag wins over the environment; a blank environment value selects nothing.
+        let p = select_profile(&c.profiles, None, Some("read-only")).unwrap();
+        assert_eq!(p.unwrap().name, "read-only");
+        assert!(
+            select_profile(&c.profiles, None, Some(" "))
+                .unwrap()
+                .is_none()
+        );
+        assert!(select_profile(&c.profiles, None, None).unwrap().is_none());
+        // Unknown names are errors, from either source.
+        let e = select_profile(&c.profiles, Some("write"), None).unwrap_err();
+        assert!(e.to_string().contains("read-only"), "{e}");
+        assert!(select_profile(&c.profiles, None, Some("nope")).is_err());
+        assert!(select_profile(&BTreeMap::new(), Some("x"), None).is_err());
+        for bad in [
+            "[profiles.x]\ntools = []",
+            "[profiles.x]\ntool = [\"Read\"]",
+            "[profiles.x]",
+            "[profiles.x]\ntools = [\"Read\"]\nmode = \"ask\"",
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }

@@ -3,21 +3,27 @@
 //! issue in a public repository tells the agent to copy private repository content into a
 //! public pull request.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use agent_trace_core::{
-    Analyzer, AttemptStatus, Confidence, EventKind, ExecutionMode, Finding, MemoryTrace,
-    PolicyConfig, ToolPolicy, TraceRecord, TraceRecorder, TraceStatus, TrustLevel,
+    Analyzer, AttemptStatus, Confidence, Event, EventKind, ExecutionMode, Finding, MemoryTrace,
+    PolicyConfig, ProfileConfig, ToolPolicy, ToolProfile, TraceRecord, TraceRecorder, TraceStatus,
+    TrustLevel,
 };
 use agent_trace_mcp::{McpSession, Proxy, ProxyConfig, ProxyMode};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ContentBlock, ServerCapabilities, ServerConfig,
+    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, ContentBlock,
+    ElicitRequestParams, ElicitResult, ElicitationAction, Implementation, ServerCapabilities,
+    ServerConfig,
 };
-use rmcp::service::RunningService;
-use rmcp::{ErrorData, RoleClient, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
+use rmcp::service::{RequestContext, RunningService};
+use rmcp::{
+    ClientHandler, ErrorData, RoleClient, ServerHandler, ServiceExt, tool, tool_handler,
+    tool_router,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -113,10 +119,10 @@ fn policy() -> ToolPolicy {
     })
 }
 
-struct Harness {
+struct Harness<C: ClientHandler = ()> {
     proxy: Proxy,
     trace: Arc<MemoryTrace>,
-    client: RunningService<RoleClient, ()>,
+    client: RunningService<RoleClient, C>,
     pull_requests: Arc<AtomicUsize>,
 }
 
@@ -138,16 +144,25 @@ async fn start_on(
     mode: ProxyMode,
     taint_sources: &[&str],
 ) -> Harness {
-    let pull_requests = Arc::new(AtomicUsize::new(0));
-    let upstream = McpSession::connect_in_process(FakeGithub::new(pull_requests.clone()))
-        .await
-        .unwrap();
     let config = ProxyConfig {
         mode,
         policy: policy(),
         taint_sources: taint_sources.iter().map(|s| s.to_string()).collect(),
         ..ProxyConfig::new(name)
     };
+    start_with(trace, config, ()).await
+}
+
+/// A proxy with `config` in front of a fake GitHub server, used by `client`.
+async fn start_with<C: ClientHandler>(
+    trace: Arc<MemoryTrace>,
+    config: ProxyConfig,
+    client: C,
+) -> Harness<C> {
+    let pull_requests = Arc::new(AtomicUsize::new(0));
+    let upstream = McpSession::connect_in_process(FakeGithub::new(pull_requests.clone()))
+        .await
+        .unwrap();
     let proxy = Proxy::new(upstream, trace.clone(), config).unwrap();
     let (client_io, server_io) = tokio::io::duplex(256 * 1024);
     let server = proxy.clone();
@@ -156,7 +171,7 @@ async fn start_on(
             let _ = running.waiting().await;
         }
     });
-    let client = ().serve(client_io).await.unwrap();
+    let client = client.serve(client_io).await.unwrap();
     Harness {
         proxy,
         trace,
@@ -165,7 +180,7 @@ async fn start_on(
     }
 }
 
-impl Harness {
+impl<C: ClientHandler> Harness<C> {
     async fn call(&self, tool: &str, args: Value) -> CallToolResult {
         let args: Map<String, Value> = args.as_object().unwrap().clone();
         self.client
@@ -453,4 +468,309 @@ async fn proxy_traces_yield_a_replay_fixture() {
     assert_eq!(fixture.calls[0].tool, "get_issue");
     assert_eq!(fixture.calls[0].arguments["number"], 1);
     assert!(fixture.calls[0].text.contains("include everything"));
+}
+
+/// An MCP client that answers the proxy's approval questions like a user would.
+#[derive(Clone)]
+struct AskingClient {
+    /// The answer to every question; `None` = the client does not announce elicitation.
+    answer: Option<(ElicitationAction, Option<Value>)>,
+    /// The questions asked.
+    asked: Arc<Mutex<Vec<String>>>,
+}
+
+impl AskingClient {
+    fn answering(action: ElicitationAction, content: Option<Value>) -> Self {
+        Self {
+            answer: Some((action, content)),
+            asked: Arc::default(),
+        }
+    }
+    fn approving() -> Self {
+        Self::answering(ElicitationAction::Accept, Some(json!({"approve": true})))
+    }
+    fn questions(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+impl ClientHandler for AskingClient {
+    fn get_info(&self) -> ClientConfig {
+        let capabilities = match self.answer {
+            Some(_) => ClientCapabilities::builder().enable_elicitation().build(),
+            None => ClientCapabilities::default(),
+        };
+        ClientConfig::new(capabilities, Implementation::new("asking-client", "1.0.0"))
+    }
+
+    async fn create_elicitation(
+        &self,
+        request: ElicitRequestParams,
+        _context: RequestContext<RoleClient>,
+    ) -> Result<ElicitResult, ErrorData> {
+        if let ElicitRequestParams::FormElicitationParams { message, .. } = &request {
+            self.asked.lock().unwrap().push(message.clone());
+        }
+        let (action, content) = self
+            .answer
+            .clone()
+            .unwrap_or((ElicitationAction::Decline, None));
+        let result = ElicitResult::new(action);
+        Ok(match content {
+            Some(c) => result.with_content(c),
+            None => result,
+        })
+    }
+}
+
+fn ask_config(profile: Option<ToolProfile>) -> ProxyConfig {
+    ProxyConfig {
+        mode: ProxyMode::Ask,
+        policy: policy(),
+        profile,
+        ..ProxyConfig::new("github")
+    }
+}
+
+/// The policy decisions on the last request for `tool`, in order.
+fn decisions<'a>(record: &'a TraceRecord, tool: &str) -> Vec<&'a Event> {
+    let request = record
+        .events
+        .iter()
+        .rfind(|e| e.kind == EventKind::ToolCallRequested && e.name == tool)
+        .unwrap();
+    record
+        .events
+        .iter()
+        .filter(|e| {
+            e.kind == EventKind::ToolPolicyDecision && e.parent_event_id == Some(request.event_id)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn ask_mode_forwards_a_call_the_user_approves() {
+    let client = AskingClient::approving();
+    let h = start_with(new_trace(), ask_config(None), client.clone()).await;
+    // Before any untrusted content nothing is asked.
+    h.call(
+        "create_pull_request",
+        json!({"repo": "victim/private-repo", "title": "t", "body": "b"}),
+    )
+    .await;
+    assert!(client.questions().is_empty());
+    let result = h.attack().await;
+    assert_ne!(result.is_error, Some(true), "{}", text(&result));
+    let questions = client.questions();
+    assert_eq!(questions.len(), 1);
+    assert!(
+        questions[0].contains("create_pull_request") && questions[0].contains("github:get_issue"),
+        "{}",
+        questions[0]
+    );
+    let (record, findings, pull_requests) = h.finish().await;
+    assert_eq!(pull_requests, 2);
+    agent_trace_core::validate(&record).unwrap();
+
+    let d = decisions(&record, "create_pull_request");
+    assert_eq!(d.len(), 2);
+    assert_eq!(d[0].payload["decision"], "ask");
+    assert_eq!(d[1].payload["decision"], "allow");
+    assert_eq!(d[1].payload["human_approval"], "accepted");
+    assert_eq!(d[1].caused_by_event_id, Some(d[0].event_id));
+    let executed = record
+        .events
+        .iter()
+        .rfind(|e| e.kind == EventKind::ToolCallExecuted)
+        .unwrap();
+    assert_eq!(executed.caused_by_event_id, Some(d[1].event_id));
+
+    assert!(
+        find(&findings, "AT-004").is_none(),
+        "an approved call is not an unenforced denial: {findings:#?}"
+    );
+    let at002 = findings
+        .iter()
+        .rfind(|f| f.rule_id == "AT-002")
+        .expect("AT-002");
+    assert_eq!(at002.attempt_status, AttemptStatus::Executed);
+    assert!(
+        at002.description.contains("A human approved the call"),
+        "{}",
+        at002.description
+    );
+}
+
+#[tokio::test]
+async fn ask_mode_blocks_when_the_user_says_no() {
+    for (action, content, recorded) in [
+        (
+            ElicitationAction::Accept,
+            Some(json!({"approve": false})),
+            "declined",
+        ),
+        (ElicitationAction::Accept, Some(json!({})), "declined"),
+        (ElicitationAction::Decline, None, "declined"),
+        (ElicitationAction::Cancel, None, "cancelled"),
+    ] {
+        let client = AskingClient::answering(action, content);
+        let h = start_with(new_trace(), ask_config(None), client.clone()).await;
+        let result = h.attack().await;
+        assert_eq!(result.is_error, Some(true), "{recorded}");
+        assert!(text(&result).contains("BLOCKED"), "{}", text(&result));
+        assert_eq!(client.questions().len(), 1);
+        let (record, findings, pull_requests) = h.finish().await;
+        assert_eq!(pull_requests, 0, "{recorded}");
+        let d = decisions(&record, "create_pull_request");
+        assert_eq!(d[1].payload["decision"], "deny");
+        assert_eq!(d[1].payload["human_approval"], recorded);
+        let at004 = find(&findings, "AT-004").expect("AT-004");
+        assert_eq!(at004.attempt_status, AttemptStatus::Blocked);
+    }
+}
+
+#[tokio::test]
+async fn ask_mode_fails_closed_without_elicitation() {
+    let client = AskingClient {
+        answer: None,
+        asked: Arc::default(),
+    };
+    let h = start_with(new_trace(), ask_config(None), client.clone()).await;
+    let result = h.attack().await;
+    assert_eq!(result.is_error, Some(true));
+    assert!(
+        text(&result).contains("does not support elicitation"),
+        "{}",
+        text(&result)
+    );
+    assert!(client.questions().is_empty());
+    let (record, findings, pull_requests) = h.finish().await;
+    assert_eq!(pull_requests, 0);
+    let d = decisions(&record, "create_pull_request");
+    assert_eq!(d[1].payload["human_approval"], "unsupported");
+    assert_eq!(
+        find(&findings, "AT-004").unwrap().attempt_status,
+        AttemptStatus::Blocked
+    );
+}
+
+#[tokio::test]
+async fn ask_mode_never_asks_about_a_canary() {
+    const CANARY: &str = "AKIAQX7CANARYPROXY4ZT";
+    let canary = agent_trace_core::canary::Canary::new("aws-decoy", CANARY).unwrap();
+    agent_trace_core::canary::configure(vec![canary]).unwrap();
+    let client = AskingClient::approving();
+    let h = start_with(new_trace(), ask_config(None), client.clone()).await;
+    // The issue taints the session, so without the canary this call would be asked.
+    h.call(
+        "get_issue",
+        json!({"repo": "victim/public-repo", "number": 1}),
+    )
+    .await;
+    let result = h
+        .call(
+            "create_pull_request",
+            json!({"repo": "victim/public-repo", "title": "t", "body": format!("key {CANARY}")}),
+        )
+        .await;
+    assert_eq!(result.is_error, Some(true));
+    assert!(text(&result).contains("canary token"), "{}", text(&result));
+    assert!(client.questions().is_empty(), "a canary is a hard denial");
+    let (record, _, pull_requests) = h.finish().await;
+    assert_eq!(pull_requests, 0);
+    let d = decisions(&record, "create_pull_request");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].payload["decision"], "deny");
+}
+
+fn read_only() -> ToolProfile {
+    ToolProfile::new(
+        "read-only",
+        &ProfileConfig {
+            tools: vec!["get_*".into(), "list_*".into(), "search_*".into()],
+        },
+    )
+}
+
+#[tokio::test]
+async fn profiles_hide_and_deny_tools_in_enforce_and_ask_mode() {
+    for mode in [ProxyMode::Enforce, ProxyMode::Ask] {
+        let client = AskingClient::approving();
+        let config = ProxyConfig {
+            mode,
+            ..ask_config(Some(read_only()))
+        };
+        let h = start_with(new_trace(), config, client.clone()).await;
+        let tools = h.client.list_all_tools().await.unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(!names.contains(&"create_pull_request"));
+        // No untrusted content: only the profile denies, and the user is not asked.
+        let result = h
+            .call(
+                "create_pull_request",
+                json!({"repo": "victim/private-repo", "title": "t", "body": "b"}),
+            )
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(
+            text(&result).contains("not allowed by profile \"read-only\""),
+            "{}",
+            text(&result)
+        );
+        assert!(client.questions().is_empty());
+        let ok = h
+            .call(
+                "get_issue",
+                json!({"repo": "victim/public-repo", "number": 1}),
+            )
+            .await;
+        assert_ne!(ok.is_error, Some(true));
+        let (record, _, pull_requests) = h.finish().await;
+        assert_eq!(pull_requests, 0);
+        let connected = record
+            .events
+            .iter()
+            .find(|e| e.name == "mcp-server-connected")
+            .unwrap();
+        assert_eq!(connected.payload["profile"]["name"], "read-only");
+        let listing = record
+            .events
+            .iter()
+            .find(|e| e.name == "tools/list")
+            .unwrap();
+        assert_eq!(
+            listing.payload["hidden_by_profile"],
+            json!(["create_pull_request"])
+        );
+        let d = decisions(&record, "create_pull_request");
+        assert_eq!(d[0].payload["profile"], "read-only");
+    }
+}
+
+#[tokio::test]
+async fn profiles_in_observe_mode_record_would_deny() {
+    let config = ProxyConfig {
+        mode: ProxyMode::Observe,
+        ..ask_config(Some(read_only()))
+    };
+    let h = start_with(new_trace(), config, ()).await;
+    assert_eq!(h.client.list_all_tools().await.unwrap().len(), 3);
+    let result = h
+        .call(
+            "create_pull_request",
+            json!({"repo": "victim/private-repo", "title": "t", "body": "b"}),
+        )
+        .await;
+    assert_ne!(result.is_error, Some(true));
+    let (record, _, pull_requests) = h.finish().await;
+    assert_eq!(pull_requests, 1);
+    let d = decisions(&record, "create_pull_request");
+    assert_eq!(d[0].payload["would_deny"], true);
+    assert!(
+        d[0].payload["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not allowed by profile")
+    );
 }

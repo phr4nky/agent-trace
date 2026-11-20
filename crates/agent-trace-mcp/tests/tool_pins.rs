@@ -300,3 +300,48 @@ async fn without_a_pin_store_nothing_is_pinned() {
     let record = trace.snapshot();
     assert!(named(&record, "mcp-tools-pinned").is_empty());
 }
+
+#[tokio::test]
+async fn in_ask_mode_a_changed_tool_is_hidden_and_denied_without_asking() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = PinStore::new(dir.path().join("pins"));
+    let server = Mutable {
+        description: Arc::new(Mutex::new(HONEST.into())),
+        extra_tool: Arc::new(AtomicBool::new(false)),
+        calls: Arc::new(AtomicUsize::new(0)),
+    };
+    let s = session(&server, &store, ProxyMode::Ask).await;
+    assert_eq!(s.tools().await.len(), 2);
+    s.finish().await;
+
+    *server.description.lock().unwrap() = POISONED.into();
+    let calls_before = server.calls.load(Ordering::SeqCst);
+    let s = session(&server, &store, ProxyMode::Ask).await;
+    assert_eq!(s.tools().await, vec!["create_pull_request"]);
+    let denied = s.call("get_issue").await;
+    assert_eq!(denied.is_error, Some(true));
+    assert!(
+        text(&denied).contains("changed since it was pinned"),
+        "{}",
+        text(&denied)
+    );
+    assert_eq!(server.calls.load(Ordering::SeqCst), calls_before);
+    let (record, findings) = s.finish().await;
+    // A hard denial: the user is never asked.
+    assert!(
+        record
+            .events
+            .iter()
+            .all(|e| e.payload.get("decision").and_then(Value::as_str) != Some("ask")),
+        "a changed tool must not be put to the user"
+    );
+    assert_eq!(
+        named(&record, "mcp-tool-definitions-changed")[0].payload["action"],
+        "hidden_and_denied"
+    );
+    let at008 = findings
+        .iter()
+        .find(|f| f.rule_id == "AT-008")
+        .expect("AT-008");
+    assert_eq!(at008.attempt_status, AttemptStatus::Blocked);
+}

@@ -25,6 +25,7 @@ fn bin(data: &Path, args: &[&str]) -> Output {
         .args(args)
         .env_remove("AGENT_TRACE_DATA_DIR")
         .env_remove("AGENT_TRACE_CONFIG")
+        .env_remove("AGENT_TRACE_PROFILE")
         .output()
         .expect("run agent-trace")
 }
@@ -48,6 +49,7 @@ impl Client {
             .arg(&documents)
             .env_remove("AGENT_TRACE_DATA_DIR")
             .env_remove("AGENT_TRACE_CONFIG")
+            .env_remove("AGENT_TRACE_PROFILE")
             .env_remove("AGENT_TRACE_SESSION")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -208,6 +210,34 @@ fn invalid_config_is_an_error_not_a_silent_default() {
     );
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("invalid config"));
+}
+
+#[test]
+fn an_unknown_profile_is_an_error() {
+    let data = tempfile::tempdir().unwrap();
+    let config = data.path().join("c.toml");
+    std::fs::write(&config, "[profiles.read-only]\ntools = [\"get_*\"]\n").unwrap();
+    let out = bin(
+        data.path(),
+        &[
+            "--config",
+            config.to_str().unwrap(),
+            "proxy",
+            "--mode",
+            "ask",
+            "--profile",
+            "read-0nly",
+            "--",
+            "true",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty(), "stdout belongs to MCP");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("unknown profile \"read-0nly\"") && err.contains("read-only"),
+        "{err}"
+    );
 }
 
 /// Two proxies started by the same client process (this test) share one trace: the

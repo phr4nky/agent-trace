@@ -190,7 +190,7 @@ impl LabServer {
             "reason": outcome.reason,
         });
         Ok(match outcome.decision {
-            Decision::Deny => CallToolResult::structured_error(value),
+            Decision::Deny | Decision::Ask => CallToolResult::structured_error(value),
             Decision::Allow => CallToolResult::structured(value),
         })
     }
