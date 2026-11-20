@@ -10,6 +10,15 @@ The section of a version is used as the release notes of its GitHub release.
 
 ### Added
 
+- **Canary tokens** (`[[canaries]]` in `agent-trace.toml`, `agent-trace canary new|list`): decoy
+  secrets whose use in a tool call is evidence of a leak attempt. Values are matched on the
+  original content (as written and percent-encoded) before redaction, stored traces keep only
+  the canary's name, and the value is replaced with `[REDACTED:canary]` everywhere. New rule
+  **AT-007** reports tool calls that carry a canary (critical, or high when blocked) with the
+  path from where it entered the trace. The policy gate of the proxy and the hooks denies such
+  calls in enforce mode, whatever the tool. Values can come from an environment variable, so
+  the canary list need not sit in a file the agent can read. `canary new` prints realistic
+  decoys (AWS key ID, GitHub token, hex key, password). See docs/canaries.md.
 - **Graph:** clicking an event opens an info card next to it: agent, origin, trust, tool state
   and redactions at a glance, timing (since start, since the previous event and since its
   cause), a payload summary, the findings it is evidence for, how many events lie up- and

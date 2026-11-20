@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use agent_trace_core::canary::{self, CanaryConfig};
 use agent_trace_core::redact::{self, RedactionConfig};
 use agent_trace_core::rules::{CustomRule, CustomRuleConfig};
 use agent_trace_core::{Analyzer, PolicyConfig, ToolPolicy};
@@ -36,6 +37,9 @@ pub struct Config {
     /// Declarative detection rules (`[[rules]]`), run after the built-in ones.
     #[serde(default)]
     pub rules: Vec<CustomRuleConfig>,
+    /// Canary tokens (`[[canaries]]`): decoy secrets reported by AT-007.
+    #[serde(default)]
+    pub canaries: Vec<CanaryConfig>,
 }
 
 /// The `[retention]` table.
@@ -169,6 +173,8 @@ fn parse_file(path: &Path) -> anyhow::Result<Config> {
 pub fn parse(text: &str) -> anyhow::Result<Config> {
     let config: Config = toml::from_str(text)?;
     redact::validate_config(&config.redaction).map_err(anyhow::Error::msg)?;
+    // Values from `env` are read here too, so a missing variable is reported by every command.
+    canary::resolve(&config.canaries).map_err(anyhow::Error::msg)?;
     let mut ids = std::collections::HashSet::new();
     for rule in &config.rules {
         CustomRule::new(rule.clone()).map_err(anyhow::Error::msg)?;
@@ -227,6 +233,28 @@ mod tests {
             "[proxi]\nmode = \"enforce\"",
             "[policy]\nprivileged = \"x\"",
             "[hooks]\non_error = \"ignore\"",
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn canaries_are_validated() {
+        let c = parse(
+            r#"
+            [[canaries]]
+            name = "aws-decoy"
+            value = "AKIAZ7Q3CANARY4X2LMN"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(c.canaries.len(), 1);
+        for bad in [
+            "[[canaries]]\nname = \"x\"\nvalue = \"short\"",
+            "[[canaries]]\nname = \"Bad Name\"\nvalue = \"long-enough-value\"",
+            "[[canaries]]\nname = \"x\"",
+            "[[canaries]]\nname = \"x\"\nenv = \"AGENT_TRACE_TEST_UNSET_CANARY_VAR\"",
+            "[[canaries]]\nname = \"x\"\nvalue = \"long-enough-value\"\nlabel = \"y\"",
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }

@@ -56,8 +56,10 @@ The default policy treats Claude Code's `Bash`, `PowerShell`, `Write`, `Edit`, `
 A tool call is denied when:
 
 1. it is a privileged tool and untrusted content from a taint source reached the acting agent
-   earlier in the session, or
-2. it is an outbound tool and a destination is not on the allowlist.
+   earlier in the session,
+2. it is an outbound tool and a destination is not on the allowlist, or
+3. its arguments carry a [canary token](canaries.md), whatever the tool (for example a decoy key
+   from `.env` in a `Bash` command).
 
 Which content is untrusted is set by `taint_sources` (tool names, `*` wildcards). The default is
 `["WebFetch", "WebSearch", "mcp__*"]`: content from outside the machine. Local files do not count

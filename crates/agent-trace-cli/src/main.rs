@@ -145,6 +145,12 @@ enum Command {
         #[arg(long)]
         require_signature: bool,
     },
+    /// Canary tokens: decoy secrets whose use in a tool call is reported (AT-007) and, in
+    /// enforce mode, denied. Configure them with [[canaries]] in agent-trace.toml.
+    Canary {
+        #[command(subcommand)]
+        command: CanaryCommand,
+    },
     /// Manage the key that signs exports.
     Keys {
         #[command(subcommand)]
@@ -384,6 +390,20 @@ pub enum ProviderArg {
 }
 
 #[derive(Debug, Subcommand)]
+enum CanaryCommand {
+    /// Print a fresh decoy value and its [[canaries]] entry (nothing is written).
+    New {
+        /// Name shown in findings: lowercase letters, digits, `-`, `_`, `.`.
+        name: String,
+        /// Shape of the decoy.
+        #[arg(long, value_enum, default_value_t = commands::canary::CanaryKind::Aws)]
+        kind: commands::canary::CanaryKind,
+    },
+    /// List the configured canaries (names only).
+    List,
+}
+
+#[derive(Debug, Subcommand)]
 enum KeysCommand {
     /// Create an Ed25519 signing key (never overwrites an existing key).
     Generate {
@@ -475,8 +495,13 @@ fn main() -> ExitCode {
     };
     // Configured redaction applies to everything this process stores, exports and prints,
     // so a configuration that cannot be loaded stops every command instead of being skipped.
+    // Canaries likewise: they are matched before redaction and checked by the policy gate.
     let installed = ctx.config().and_then(|loaded| {
-        agent_trace_core::redact::configure(&loaded.config.redaction).map_err(anyhow::Error::msg)
+        agent_trace_core::redact::configure(&loaded.config.redaction)
+            .map_err(anyhow::Error::msg)?;
+        let canaries = agent_trace_core::canary::resolve(&loaded.config.canaries)
+            .map_err(anyhow::Error::msg)?;
+        agent_trace_core::canary::configure(canaries).map_err(anyhow::Error::msg)
     });
     if let Err(e) = installed {
         eprintln!(
@@ -636,6 +661,12 @@ fn main() -> ExitCode {
             public_key,
             require_signature,
         } => commands::keys::verify(&ctx, &file, &public_key, require_signature),
+        Command::Canary {
+            command: CanaryCommand::New { name, kind },
+        } => commands::canary::new(&name, kind),
+        Command::Canary {
+            command: CanaryCommand::List,
+        } => commands::canary::list(&ctx),
         Command::Keys {
             command: KeysCommand::Generate { key },
         } => commands::keys::generate(&ctx, key.as_deref()),

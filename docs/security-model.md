@@ -11,6 +11,7 @@ integrity of evidence.
 |---|---|
 | Hostile MCP server results / prompt injection in documents | Results are labelled `lower_trust` and treated as data. AT-001/AT-005 flag suspicious content and AT-002 flags privileged requests caused by it |
 | Exfiltration via outbound tools | Destination allowlist in `ToolPolicy`, enforced in the client gate (and server-side for the lab). AT-003/AT-004 record attempts |
+| Secrets moved by a steered agent, including to allowlisted places (a ticket, a pull request) | Canary tokens: configured decoy values are matched before redaction, only their names are stored, AT-007 reports every tool call that carries one and the policy gate denies it in enforce mode. Values can come from the environment so the agent cannot read the canary list. Transformed values (base64, split) are not recognized |
 | Accidental secret logging | Same `Redactor` on storage, JSONL/JSON, logs (redacting writer) and TUI. Field-name and value patterns |
 | Maliciously shaped JSONL imports | Line-length, event-count and total-size limits, strict parsing, schema version check, link/cycle validation, re-redaction. Imported findings are ignored. Rules run in time linear in the number of causal links |
 | Path traversal in lab server | Relative `Normal` components only, extension allowlist, canonicalization + prefix check (symlinks), size limit |

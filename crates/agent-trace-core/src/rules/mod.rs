@@ -1,5 +1,6 @@
 //! Deterministic, typed security rules. Findings are forensic indicators.
 
+mod canary;
 pub mod custom;
 mod exfiltration;
 mod injection;
@@ -13,6 +14,7 @@ use crate::finding::{AttemptStatus, Confidence, Finding, Severity};
 use crate::policy::ToolPolicy;
 use crate::provenance::TraceIndex;
 
+pub use canary::CanaryLeakRule;
 pub use custom::{CustomRule, CustomRuleConfig, RuleTarget};
 pub use exfiltration::{BlockedActionRule, ExfiltrationRule};
 pub use injection::{
@@ -69,6 +71,7 @@ impl Analyzer {
                 Box::new(BlockedActionRule),
                 Box::new(AuthoritySpoofingRule),
                 Box::new(CrossAgentTaintRule),
+                Box::new(CanaryLeakRule),
             ],
             policy,
         }

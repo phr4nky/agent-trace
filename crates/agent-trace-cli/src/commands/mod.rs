@@ -1,4 +1,5 @@
 pub mod analyze;
+pub mod canary;
 pub mod demo;
 pub mod export;
 pub mod graph;
