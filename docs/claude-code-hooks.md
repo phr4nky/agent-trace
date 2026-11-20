@@ -46,7 +46,9 @@ A resumed session continues its trace.
 | SessionEnd | `agent_completed`; the trace status becomes `completed` |
 
 Tool calls inside a subagent carry its `agent_type/agent_id` as the agent. Payloads are redacted
-like every other trace. Tool results are truncated at the usual limits (the content rules still
+like every other trace; for Bash commands this includes credentials in flags and headers
+(`curl -u user:password`, `mysql -pPASSWORD`, `docker login -p`, `--password VALUE`,
+`Cookie:`). Tool results are truncated at the usual limits (the content rules still
 see the full text).
 
 ## Policy

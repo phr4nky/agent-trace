@@ -54,6 +54,11 @@ fn looks_like_token(value: &str) -> bool {
             .any(|c| c.is_ascii_digit() || "._~+/=-".contains(c))
 }
 
+/// `user:group` IDs (`docker run -u 1000:1000`) are not passwords.
+fn not_numeric(value: &str) -> bool {
+    !value.chars().all(|c| c.is_ascii_digit())
+}
+
 fn patterns() -> &'static [Pattern] {
     static PATTERNS: OnceLock<Vec<Pattern>> = OnceLock::new();
     PATTERNS.get_or_init(|| {
@@ -99,13 +104,86 @@ fn patterns() -> &'static [Pattern] {
                 r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}",
                 0,
             ),
-            p("aws_access_key", r"\bAKIA[0-9A-Z]{16}\b", 0),
+            // Long-term (AKIA) and temporary (ASIA) access key IDs.
+            p("aws_access_key", r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b", 0),
             p("slack_token", r"\bxox[abprs]-[A-Za-z0-9-]{10,}", 0),
+            p(
+                "slack_webhook",
+                r"https://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9/_-]{20,}",
+                0,
+            ),
+            // Secret and restricted keys and webhook secrets; publishable keys (pk_) are public.
+            p("stripe_key", r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,}", 0),
+            p("stripe_key", r"\bwhsec_[A-Za-z0-9+/=]{24,}", 0),
+            p("google_api_key", r"\bAIza[0-9A-Za-z_-]{35}", 0),
+            p("google_oauth_secret", r"\bGOCSPX-[A-Za-z0-9_-]{24,}", 0),
+            p(
+                "gitlab_token",
+                r"\bgl(?:pat|ptt|dt|rt|soat|cbt|ft|imt)-[A-Za-z0-9_-]{20,}",
+                0,
+            ),
+            p("npm_token", r"\bnpm_[A-Za-z0-9]{36}\b", 0),
+            p(
+                "pypi_token",
+                r"\bpypi-(?:AgEIcHlwaS5vcmc|AgENdGVzdC5weXBpLm9yZw)[A-Za-z0-9_-]{50,}",
+                0,
+            ),
+            p("huggingface_token", r"\bhf_[A-Za-z0-9]{34,}", 0),
+            p("sendgrid_key", r"\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}", 0),
+            p("digitalocean_token", r"\bdo[opr]_v1_[a-f0-9]{64}", 0),
+            p("shopify_token", r"\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}", 0),
+            // Azure storage / Service Bus connection strings: only the key.
+            p(
+                "azure_key",
+                r"(?i)\b(?:AccountKey|SharedAccessKey)=([A-Za-z0-9+/]{20,}={0,2})",
+                1,
+            ),
             p(
                 "url_credentials",
                 // Greedy up to the *last* '@' of the authority: drivers split there, so a
                 // password with an unencoded '@' must be covered completely.
                 r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]*:([^\s/]+)@",
+                1,
+            ),
+            // Command lines (the Claude Code hook records every Bash command): credentials in
+            // flags. Only flags whose meaning is unambiguous; `-p` alone means a port or
+            // "parents" for most tools, so it counts only after mysql/mariadb and `login`.
+            checked(
+                "cli_credentials",
+                // curl -u/--user/-U/--proxy-user user:password (also wget-style `--user=`).
+                r#"(?:^|\s)(?:-u|-U|--user|--proxy-user)(?:\s+|=)?['"]?[^\s:'"]+:([^\s'"]+)"#,
+                1,
+                not_numeric,
+            ),
+            p(
+                "cli_credentials",
+                // mysql -pSECRET (the attached form; `-p SECRET` asks and names a database).
+                r#"\b(?i:mysql|mysqldump|mysqladmin|mysqlimport|mariadb|mariadb-dump)\b[^\n|;&]*?\s-p['"]?([^\s'"]+)"#,
+                1,
+            ),
+            p(
+                "cli_credentials",
+                r#"\b(?:docker|podman|nerdctl|buildah)\s+login\b[^\n|;&]*?\s-p(?:\s+|=)?['"]?([^\s'"-][^\s'"]*)"#,
+                1,
+            ),
+            p(
+                "cli_credentials",
+                // --password SECRET / --passwd / --pass (not --password-stdin).
+                r#"(?:^|\s)--(?:password|passwd|pass)(?:\s+|=)['"]?([^\s'"-][^\s'"]*)"#,
+                1,
+            ),
+            p("cli_credentials", r#"\bsshpass\s+-p\s*['"]?([^\s'"]+)"#, 1),
+            // Cookie / Set-Cookie headers and curl -b/--cookie name=value (a file name has no
+            // `=`): session cookies are credentials.
+            checked(
+                "cookie",
+                r#"(?i)\b(?:set-)?cookie\s*:\s*([^\s"';]+(?:;\s*[^\s"';]+)*)"#,
+                1,
+                |v| v.contains('='),
+            ),
+            p(
+                "cookie",
+                r#"(?:^|\s)(?:-b|--cookie)\s+['"]?([^\s'"]*=[^\s'"]*)"#,
                 1,
             ),
             p(
@@ -524,6 +602,168 @@ mod tests {
                 !out.contains("abcdefghijklmnopqrstuvwxyz") && !out.contains("dXNlcjpwYXNzd29yZA"),
                 "{out}"
             );
+        }
+    }
+
+    /// Widely used token formats. The samples are built at run time so that secret scanners
+    /// do not take this file for a leak.
+    #[test]
+    fn redacts_common_provider_token_formats() {
+        let r = Redactor::new();
+        let a = |n: usize| "aB3dE5fG7h".repeat(n.div_ceil(10))[..n].to_owned();
+        let hex = |n: usize| "a1b2c3d4e5f6".repeat(n.div_ceil(12))[..n].to_owned();
+        let cases = [
+            ("stripe_key", format!("sk_{}_{}", "live", a(24))),
+            ("stripe_key", format!("rk_{}_{}", "test", a(24))),
+            ("stripe_key", format!("whsec_{}", a(32))),
+            ("google_api_key", format!("AI{}{}", "za", a(35))),
+            ("google_oauth_secret", format!("GOCSPX-{}", a(28))),
+            ("gitlab_token", format!("gl{}-{}", "pat", a(20))),
+            ("gitlab_token", format!("gl{}-{}", "rt", a(20))),
+            ("npm_token", format!("npm_{}", a(36))),
+            ("pypi_token", format!("pypi-AgEIcHlwaS5vcmc{}", a(60))),
+            ("huggingface_token", format!("hf_{}", a(34))),
+            ("sendgrid_key", format!("SG.{}.{}", a(22), a(43))),
+            ("digitalocean_token", format!("dop_v1_{}", hex(64))),
+            ("shopify_token", format!("shp{}_{}", "at", hex(32))),
+            (
+                "slack_webhook",
+                format!(
+                    "https://hooks.slack.com/services/T{}/B{}/{}",
+                    "0A1B2C3D4",
+                    "5E6F7G8H9",
+                    a(24)
+                ),
+            ),
+            (
+                "aws_access_key",
+                format!("AS{}{}", "IA", "Q2W3E4R5T6Y7U8I9"),
+            ),
+        ];
+        for (label, token) in &cases {
+            let text = format!("curl -d value {token} x");
+            let (out, report) = r.redact_str(&text);
+            assert!(
+                !out.contains(token.as_str()),
+                "not redacted ({label}): {out}"
+            );
+            assert!(
+                out.contains(&format!("[REDACTED:{label}]")),
+                "{label}: {out}"
+            );
+            assert_eq!(report.redactions, 1, "{label}: {out}");
+            assert_eq!(r.redact_str(&out).0, out, "idempotent");
+        }
+        // Azure connection strings: only the key.
+        let conn = format!(
+            "DefaultEndpointsProtocol=https;AccountName=acme;AccountKey={}==;EndpointSuffix=core.windows.net",
+            a(86)
+        );
+        let (out, _) = r.redact_str(&conn);
+        assert!(
+            out.contains("AccountName=acme;AccountKey=[REDACTED:azure_key];EndpointSuffix"),
+            "{out}"
+        );
+        // Look-alikes that are not secrets.
+        for text in [
+            "pk_live_publishable_key_is_public_by_design",
+            "see sk_live docs and the hf_hub_download function",
+            "npm_config_registry and SG.Header are names",
+            "https://hooks.slack.com/services/ is the webhook base URL",
+        ] {
+            assert_eq!(r.redact_str(text).0, text, "over-redacted");
+        }
+    }
+
+    /// Shell commands (the Claude Code hook records every Bash command as free text) carry
+    /// credentials in flags and headers, not only in `key=value` form.
+    #[test]
+    fn redacts_credentials_in_command_lines() {
+        let r = Redactor::new();
+        for (command, secret) in [
+            (
+                "curl -u admin:S3cr3tPassw0rdA https://ci.example.com/api",
+                "S3cr3tPassw0rdA",
+            ),
+            (
+                "curl --user 'admin:S3cr3tPassw0rdB' https://x.example",
+                "S3cr3tPassw0rdB",
+            ),
+            (
+                "curl -U proxy:S3cr3tPassw0rdC -x http://p:3128 https://x",
+                "S3cr3tPassw0rdC",
+            ),
+            (
+                "mysql -h db -P 3306 -u root -pS3cr3tPassw0rdD app",
+                "S3cr3tPassw0rdD",
+            ),
+            (
+                "mysqldump -uroot -p'S3cr3tPassw0rdE' app > a.sql",
+                "S3cr3tPassw0rdE",
+            ),
+            (
+                "docker login -u bot -p S3cr3tPassw0rdF registry.example.com",
+                "S3cr3tPassw0rdF",
+            ),
+            (
+                "podman login --password S3cr3tPassw0rdG quay.io",
+                "S3cr3tPassw0rdG",
+            ),
+            (
+                "helm repo add r https://r --username u --password S3cr3tPassw0rdH",
+                "S3cr3tPassw0rdH",
+            ),
+            (
+                "sshpass -p S3cr3tPassw0rdI ssh deploy@host",
+                "S3cr3tPassw0rdI",
+            ),
+            (
+                "curl -H \"Cookie: session=S3cr3tPassw0rdJ; theme=dark\" https://app",
+                "S3cr3tPassw0rdJ",
+            ),
+            (
+                "curl -H 'cookie: a=1; sid=S3cr3tPassw0rdK' https://app",
+                "S3cr3tPassw0rdK",
+            ),
+            (
+                "Set-Cookie: sid=S3cr3tPassw0rdL; Path=/; HttpOnly",
+                "S3cr3tPassw0rdL",
+            ),
+            (
+                "curl -b 'sid=S3cr3tPassw0rdM' https://app",
+                "S3cr3tPassw0rdM",
+            ),
+            (
+                "curl --cookie \"sid=S3cr3tPassw0rdN\" https://app",
+                "S3cr3tPassw0rdN",
+            ),
+        ] {
+            let (out, report) = r.redact_str(command);
+            assert!(!out.contains(secret), "not redacted: {command} -> {out}");
+            assert!(report.redactions >= 1, "{command}");
+            let (again, rep) = r.redact_str(&out);
+            assert_eq!(again, out, "idempotent");
+            assert_eq!(rep.redactions, 0);
+        }
+        // The user name stays readable.
+        let (out, _) = r.redact_str("curl -u admin:S3cr3tPassw0rdA https://x");
+        assert_eq!(out, "curl -u admin:[REDACTED:cli_credentials] https://x");
+        // Flags that look alike but hold no secret.
+        for text in [
+            "git push -u origin main",
+            "docker run -u 1000:1000 -p 8080:80 nginx",
+            "mkdir -p a/b && sort -u list.txt",
+            "ssh -p 2222 deploy@host",
+            "mysql -u root -p app",
+            "mysql -h db -P 3306 -u root app",
+            "docker login -u bot --password-stdin registry.example.com",
+            "git checkout -b feature/cookie-banner",
+            "curl -b cookies.txt https://app",
+            "The cookie banner is shown once.",
+        ] {
+            let (out, report) = r.redact_str(text);
+            assert_eq!(out, text, "over-redacted");
+            assert_eq!(report.redactions, 0, "{text}");
         }
     }
 
