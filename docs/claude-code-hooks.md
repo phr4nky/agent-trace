@@ -98,7 +98,8 @@ call. The hook is not told your answer, so the trace records only what follows:
 A profile lists the tools a task needs; everything else is denied (rule 4). Select it with
 `--profile NAME` in the hook command, or with `$AGENT_TRACE_PROFILE` when you start Claude
 Code (hooks inherit its environment). An unknown name is an error: the hook exits with 1 and
-the error is shown in Claude Code.
+the error is shown in Claude Code; with `on_error = "deny"` in enforce or ask mode, PreToolUse
+calls are denied instead (see [Failure behavior](#failure-behavior)).
 
 ```toml
 [profiles.read-only]
@@ -166,6 +167,13 @@ recorder never blocks Claude Code**; the error is shown in Claude Code.
 
 With `on_error = "deny"` in enforce or ask mode, a PreToolUse call that cannot be recorded is
 denied instead (exit 2, the error is the reason). Other hook events never block.
+
+This also holds when the configuration cannot be loaded, for example a canary whose `env`
+variable is not set where Claude Code runs (started from an IDE or another terminal), a typo in
+another table, or an unknown profile: the `[hooks]` table is then read on its own. For a
+configuration error the reason Claude sees does not repeat the error, because it may name
+canaries; run `agent-trace trace list` with the hook's options in a terminal to see it. A file
+that is not valid TOML cannot say `on_error`, so the hook exits with 1.
 
 ## Command
 
