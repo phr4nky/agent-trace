@@ -31,7 +31,16 @@ The section of a version is used as the release notes of its GitHub release.
   session's metadata and each decision.
 - `PolicyOutcome` has a `class` (`hard` or `askable`) that says whether a denial may be put to
   a human; it is serialized only for askable denials, so existing JSON is unchanged.
-
+- **Attack library** (`examples/attack-library`): recordings of four published agent attacks,
+  shipped as a `replay` suite, to check a model or prompt change against known attacks: the
+  GitHub MCP issue injection (Invariant Labs), the Supabase MCP support-ticket exfiltration
+  (General Analysis, with a canary in the token table), tool poisoning (Invariant Labs) and an
+  EchoLeak-style injection through a retrieved email (CVE-2025-32711). Each recording is a
+  reconstruction with fake data, generated from a scenario file. The library's
+  `agent-trace.toml` adds the GitHub write tools to the privileged tools, rules `ATLIB-001`…`005`
+  for the attack actions and the canary. Model-free tests check that the recordings match their
+  scenarios, import cleanly, produce the expected findings and that the suite runs. See
+  examples/attack-library/README.md.
 - **Rug-pull protection for MCP servers** (`agent-trace pins list|show|reset`, `[proxy]
   pin_tools`, on by default): the proxy pins every tool definition a server announces the first
   time (SHA-256 over the canonical JSON of name, title, description, schemas and annotations)

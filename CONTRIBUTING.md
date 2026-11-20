@@ -30,7 +30,9 @@ conformance and end-to-end tests against PostgreSQL and MySQL/MariaDB (see READM
 - Demo/lab code must never execute shell commands or perform network I/O.
 - If you change the event model or lab scenarios, regenerate golden traces:
   `UPDATE_GOLDEN=1 cargo test -p agent-trace-cli --test demo_smoke deterministic`
-  and review the diff.
+  and review the diff. The attack library's recordings come from
+  `examples/attack-library/scenarios/*.json`; regenerate them with
+  `UPDATE_GOLDEN=1 cargo test -p agent-trace-cli --test attack_library recordings_match`.
 
 ## Changelog
 

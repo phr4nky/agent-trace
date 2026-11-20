@@ -118,6 +118,21 @@ Recordings are JSONL files as written by `agent-trace export --format jsonl`; th
 and re-redacted like `import`. Build a suite from real incidents: record them with the MCP proxy
 or the Claude Code hooks, export the trace, and add a case.
 
+## Attack library
+
+[examples/attack-library](../examples/attack-library) is a suite of reconstructed, published
+attacks: the GitHub MCP issue injection, the Supabase MCP support-ticket exfiltration, tool
+poisoning, and an EchoLeak-style injection through a retrieved email. It needs its own config,
+which adds the privileged GitHub tools, rules for the attack actions and a canary:
+
+```sh
+agent-trace --config examples/attack-library/agent-trace.toml \
+    replay suite examples/attack-library/suite.toml --provider anthropic
+```
+
+Its README lists the sources, what each recording contains, the findings and how faithful each
+reconstruction is.
+
 ## Limits
 
 - **The environment is frozen.** A model that takes a different path than the recorded one gets
