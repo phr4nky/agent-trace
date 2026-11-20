@@ -108,6 +108,13 @@ The section of a version is used as the release notes of its GitHub release.
   only look alike (`-p` as a port or for `mkdir`, `-u 1000:1000`, `--password-stdin`, a cookie
   file) are left alone. Traces recorded before keep their old form; delete or re-import them
   if they may hold such commands.
+- Redaction did not know several widely used token formats. Added: Stripe secret, restricted
+  and webhook keys (`sk_live_`/`sk_test_`, `rk_`, `whsec_`; publishable `pk_` keys are public
+  and stay), Google API keys (`AIza…`) and OAuth client secrets (`GOCSPX-`), GitLab tokens
+  (`glpat-`, `glptt-`, `gldt-`, `glrt-` and others), npm (`npm_`), PyPI (`pypi-`), Hugging Face
+  (`hf_`), SendGrid (`SG.`), DigitalOcean (`dop_v1_`, `doo_`, `dor_`), Shopify (`shpat_` and
+  others), Slack webhook URLs, temporary AWS access key IDs (`ASIA…`, next to `AKIA…`) and the
+  key of Azure storage and Service Bus connection strings (`AccountKey=`, `SharedAccessKey=`).
 
 ## [1.5.0] - 2026-11-17
 

@@ -104,8 +104,40 @@ fn patterns() -> &'static [Pattern] {
                 r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}",
                 0,
             ),
-            p("aws_access_key", r"\bAKIA[0-9A-Z]{16}\b", 0),
+            // Long-term (AKIA) and temporary (ASIA) access key IDs.
+            p("aws_access_key", r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b", 0),
             p("slack_token", r"\bxox[abprs]-[A-Za-z0-9-]{10,}", 0),
+            p(
+                "slack_webhook",
+                r"https://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9/_-]{20,}",
+                0,
+            ),
+            // Secret and restricted keys and webhook secrets; publishable keys (pk_) are public.
+            p("stripe_key", r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,}", 0),
+            p("stripe_key", r"\bwhsec_[A-Za-z0-9+/=]{24,}", 0),
+            p("google_api_key", r"\bAIza[0-9A-Za-z_-]{35}", 0),
+            p("google_oauth_secret", r"\bGOCSPX-[A-Za-z0-9_-]{24,}", 0),
+            p(
+                "gitlab_token",
+                r"\bgl(?:pat|ptt|dt|rt|soat|cbt|ft|imt)-[A-Za-z0-9_-]{20,}",
+                0,
+            ),
+            p("npm_token", r"\bnpm_[A-Za-z0-9]{36}\b", 0),
+            p(
+                "pypi_token",
+                r"\bpypi-(?:AgEIcHlwaS5vcmc|AgENdGVzdC5weXBpLm9yZw)[A-Za-z0-9_-]{50,}",
+                0,
+            ),
+            p("huggingface_token", r"\bhf_[A-Za-z0-9]{34,}", 0),
+            p("sendgrid_key", r"\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}", 0),
+            p("digitalocean_token", r"\bdo[opr]_v1_[a-f0-9]{64}", 0),
+            p("shopify_token", r"\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}", 0),
+            // Azure storage / Service Bus connection strings: only the key.
+            p(
+                "azure_key",
+                r"(?i)\b(?:AccountKey|SharedAccessKey)=([A-Za-z0-9+/]{20,}={0,2})",
+                1,
+            ),
             p(
                 "url_credentials",
                 // Greedy up to the *last* '@' of the authority: drivers split there, so a
@@ -570,6 +602,76 @@ mod tests {
                 !out.contains("abcdefghijklmnopqrstuvwxyz") && !out.contains("dXNlcjpwYXNzd29yZA"),
                 "{out}"
             );
+        }
+    }
+
+    /// Widely used token formats. The samples are built at run time so that secret scanners
+    /// do not take this file for a leak.
+    #[test]
+    fn redacts_common_provider_token_formats() {
+        let r = Redactor::new();
+        let a = |n: usize| "aB3dE5fG7h".repeat(n.div_ceil(10))[..n].to_owned();
+        let hex = |n: usize| "a1b2c3d4e5f6".repeat(n.div_ceil(12))[..n].to_owned();
+        let cases = [
+            ("stripe_key", format!("sk_{}_{}", "live", a(24))),
+            ("stripe_key", format!("rk_{}_{}", "test", a(24))),
+            ("stripe_key", format!("whsec_{}", a(32))),
+            ("google_api_key", format!("AI{}{}", "za", a(35))),
+            ("google_oauth_secret", format!("GOCSPX-{}", a(28))),
+            ("gitlab_token", format!("gl{}-{}", "pat", a(20))),
+            ("gitlab_token", format!("gl{}-{}", "rt", a(20))),
+            ("npm_token", format!("npm_{}", a(36))),
+            ("pypi_token", format!("pypi-AgEIcHlwaS5vcmc{}", a(60))),
+            ("huggingface_token", format!("hf_{}", a(34))),
+            ("sendgrid_key", format!("SG.{}.{}", a(22), a(43))),
+            ("digitalocean_token", format!("dop_v1_{}", hex(64))),
+            ("shopify_token", format!("shp{}_{}", "at", hex(32))),
+            (
+                "slack_webhook",
+                format!(
+                    "https://hooks.slack.com/services/T{}/B{}/{}",
+                    "0A1B2C3D4",
+                    "5E6F7G8H9",
+                    a(24)
+                ),
+            ),
+            (
+                "aws_access_key",
+                format!("AS{}{}", "IA", "Q2W3E4R5T6Y7U8I9"),
+            ),
+        ];
+        for (label, token) in &cases {
+            let text = format!("curl -d value {token} x");
+            let (out, report) = r.redact_str(&text);
+            assert!(
+                !out.contains(token.as_str()),
+                "not redacted ({label}): {out}"
+            );
+            assert!(
+                out.contains(&format!("[REDACTED:{label}]")),
+                "{label}: {out}"
+            );
+            assert_eq!(report.redactions, 1, "{label}: {out}");
+            assert_eq!(r.redact_str(&out).0, out, "idempotent");
+        }
+        // Azure connection strings: only the key.
+        let conn = format!(
+            "DefaultEndpointsProtocol=https;AccountName=acme;AccountKey={}==;EndpointSuffix=core.windows.net",
+            a(86)
+        );
+        let (out, _) = r.redact_str(&conn);
+        assert!(
+            out.contains("AccountName=acme;AccountKey=[REDACTED:azure_key];EndpointSuffix"),
+            "{out}"
+        );
+        // Look-alikes that are not secrets.
+        for text in [
+            "pk_live_publishable_key_is_public_by_design",
+            "see sk_live docs and the hf_hub_download function",
+            "npm_config_registry and SG.Header are names",
+            "https://hooks.slack.com/services/ is the webhook base URL",
+        ] {
+            assert_eq!(r.redact_str(text).0, text, "over-redacted");
         }
     }
 
