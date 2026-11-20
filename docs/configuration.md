@@ -51,6 +51,10 @@ tags = ["LLM06:2025", "AML.T0053"]   # optional taxonomy tags
 [[canaries]]                      # decoy secrets (see docs/canaries.md)
 name = "aws-decoy"
 env = "AGENT_TRACE_CANARY_AWS_DECOY"     # or: value = "AKIA…"
+
+[ship]                            # agent-trace ship (see docs/server.md)
+url = "https://trace.example.com"
+token_env = "AGENT_TRACE_SHIP_TOKEN" # default; the token itself never goes into this file
 ```
 
 ## `[redaction]`
@@ -114,6 +118,16 @@ tools = [
   "get_*", "list_*", "search_*",                                          # proxy
 ]
 ```
+
+## `[ship]`
+
+- `url`: the agent-trace-server that `agent-trace ship` sends traces to (`https://…`, or plain
+  `http://` to a loopback host). `--to` overrides it.
+- `token_env`: the environment variable holding the source token (default
+  `AGENT_TRACE_SHIP_TOKEN`). `agent-trace-server source add NAME` prints a token; keep it out of
+  this file and of command lines.
+- The server reads `[policy]`, `[[rules]]` and `[redaction]` from the same file when started with
+  `--config`, and ignores the other tables. Details: [server.md](server.md).
 
 ## `[retention]` and `agent-trace prune`
 

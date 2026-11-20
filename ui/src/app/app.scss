@@ -1,0 +1,87 @@
+:host {
+  display: block;
+  min-height: 100vh;
+  background: var(--at-page-background);
+  color: var(--syui-text-color);
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.mark {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 0.2rem;
+  background: var(--syui-primary);
+  align-self: center;
+}
+
+.name {
+  font-weight: 700;
+  font-size: 1.15rem;
+}
+
+.tagline,
+.seen,
+.picker-label {
+  color: var(--syui-text-muted-color);
+  font-size: 0.85rem;
+}
+
+.picker {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 18rem;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.error {
+  margin: 1rem 1rem 0;
+}
+
+.content {
+  display: grid;
+  grid-template-columns: minmax(36rem, 2fr) 3fr;
+  gap: 1rem;
+  padding: 1rem;
+  flex: 1;
+}
+
+.graph {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 9rem);
+  min-height: 28rem;
+  border: 0;
+  border-radius: var(--syui-border-radius-md, 6px);
+}
+
+.trace-name,
+.started {
+  white-space: nowrap;
+}
+
+.state {
+  margin-left: 0.5rem;
+}
+
+@media (max-width: 1100px) {
+  .content {
+    grid-template-columns: 1fr;
+  }
+}

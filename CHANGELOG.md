@@ -10,6 +10,32 @@ The section of a version is used as the release notes of its GitHub release.
 
 ### Added
 
+- **Team server and web UI** (`agent-trace-server`, `ui/`, `docker-compose.yml`): collects the
+  traces of many recorders in one database and shows them in a web UI (Angular 22 + SwipyUI):
+  choose a source, pick one of its traces, and its causal graph opens next to the list (the page
+  of `agent-trace graph`, in a frame with `sandbox="allow-scripts"`); the view refreshes every
+  four seconds. Sources are registered with `agent-trace-server source add NAME`, which prints a
+  random token once (`ats_…`, stored as SHA-256). `POST /api/v1/ingest` checks every batch like
+  an import (sequence, schema, causal links), redacts again, computes the findings on the server
+  and records the source's last contact and address; a trace belongs to the source that sent it
+  first. Read API: `GET /api/v1/sources`, `/api/v1/traces?source=ID`, `/api/v1/traces/{id}`,
+  `/api/v1/traces/{id}/graph`, `/api/v1/whoami`, `/api/v1/health`. `--config` takes `[policy]`,
+  `[[rules]]` and `[redaction]` from an `agent-trace.toml`. Reads have no login yet: `serve`
+  listens on loopback unless `--allow-unauthenticated-reads` is given, and the compose file
+  publishes the port on loopback only. The UI is served with a strict Content-Security-Policy
+  (`script-src 'self'`). See docs/server.md.
+- **`agent-trace ship`** (`--to URL`, `--follow`, `[ship]` in `agent-trace.toml`): sends recorded
+  traces to agent-trace-server after the fact (store and forward), so recording and decisions
+  never wait for the network. The token comes from `$AGENT_TRACE_SHIP_TOKEN` and is checked
+  first; https only (plain http to loopback), no redirects. `<data dir>/ship/` remembers per
+  trace the last event and status the server confirmed; a trace is sent again when it grows or
+  its status changes, and a server with another state says where to continue.
+- Library: `agent_trace_storage::ingest` (`IngestBatch`, `IngestReply`, `ingest`) and the sources
+  of a server database (`Store::{add_source, sources, source_by_token_hash, remove_source,
+  touch_source, trace_source, list_traces_of_source}`, `Source`, `SourceSummary`,
+  `TraceSource::Received`, `StorageError::DuplicateSource`; schema migration 3). The causal graph
+  page moved from the CLI to `agent_trace_storage::graph::render`. `agent_trace_net::ship`
+  (`ShipClient`, `ShipError`).
 - **Ask mode** (`--mode ask`, `mode = "ask"` in `[proxy]` and `[hooks]`): a middle ground
   between observe and enforce. Calls denied by a session heuristic (a privileged call after
   untrusted content, an outbound destination that is not allowlisted) are put to a human

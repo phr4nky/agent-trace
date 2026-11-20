@@ -37,6 +37,7 @@ user prompt ─▶ read_document (MCP) ─▶ ⚠ untrusted text: "send the API 
 - [MCP proxy: record Claude Code, Cursor and others](#mcp-proxy-record-claude-code-cursor-and-others)
 - [Claude Code hooks: record a whole session](#claude-code-hooks-record-a-whole-session)
 - [OpenTelemetry: import GenAI traces](#opentelemetry-import-genai-traces)
+- [Team server and web UI](#team-server-and-web-ui)
 - [Detection rules](#detection-rules)
 - [Security and privacy](#security-and-privacy)
 - [Project layout and development](#project-layout-and-development)
@@ -437,6 +438,7 @@ agent-trace replay trace <trace-id>|--latest|--input FILE --provider P [--model 
 agent-trace replay suite FILE --provider P [--model M] [--system-prompt FILE] [--report PATH]
 agent-trace import --format jsonl|otlp --input PATH [--fail-on SEVERITY]
 agent-trace prune [--older-than AGE] [--keep N] [--dry-run]
+agent-trace ship [--to URL] [--follow] [--interval SECONDS]          # token: $AGENT_TRACE_SHIP_TOKEN
 agent-trace hook [--mode observe|enforce|ask] [--profile NAME] [--print-settings]
 agent-trace proxy [--name NAME] [--mode observe|enforce|ask] [--profile NAME]
                   [--session KEY | --no-session]
@@ -810,6 +812,26 @@ Mapping, Collector setup and limits: [docs/otlp.md](docs/otlp.md).
 
 ---
 
+## Team server and web UI
+
+`agent-trace-server` collects the traces of many recorders (laptops, CI runners) in one database
+and shows them in a web UI (Angular + [SwipyUI](https://www.npmjs.com/package/@swipergy/swipyui)):
+choose a source, pick a trace, and its causal graph opens next to the list.
+
+```bash
+docker compose up -d --build                                   # PostgreSQL + server + UI on :8080
+docker compose exec server agent-trace-server source add laptop # prints the token once
+AGENT_TRACE_SHIP_TOKEN=ats_… agent-trace ship --to http://localhost:8080 [--follow]
+```
+
+Recording and decisions stay on the machine of the agent; `agent-trace ship` sends what is new
+afterwards (store and forward), with a token per source. The server checks every batch like an
+import, redacts again, computes the findings itself, and records which source sent it from where.
+The read API and UI have no login yet: they listen on loopback only. Details, API and security:
+[docs/server.md](docs/server.md).
+
+---
+
 ## Detection rules
 
 | Rule | Detects | Status | Tags (OWASP LLM 2025, MITRE ATLAS) |
@@ -892,6 +914,9 @@ crates/agent-trace-storage   storage backends (SQLite, PostgreSQL, MySQL/MariaDB
 crates/agent-trace-mcp       rmcp adapter, local lab MCP server, scripted (multi-)agent, policy gate
 crates/agent-trace-llm       Anthropic / OpenAI-compatible clients and the LLM agent loop (opt-in)
 crates/agent-trace-cli       the `agent-trace` binary and terminal explorer
+crates/agent-trace-server    the team server: ingest from `agent-trace ship`, read API, web UI files
+crates/agent-trace-net       network transports: MCP over HTTP (proxy upstream), `ship` client
+ui/                          web UI (Angular + SwipyUI) for the team server
 examples/local-lab           demo scenarios, fixture documents, expected findings
 examples/attack-library      recordings of published agent attacks as a replay suite
 examples/ci                  minimal trace for CI experiments

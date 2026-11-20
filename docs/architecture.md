@@ -31,11 +31,12 @@
 | Crate | Responsibility | Must not depend on |
 |---|---|---|
 | `agent-trace-core` | Event/trace/finding model, `TraceRecorder`, `Redactor`, provenance index, validation, `ToolPolicy`, rules | `rmcp`, `ratatui`, storage, vendors |
-| `agent-trace-storage` | SQLite, PostgreSQL and MySQL/MariaDB backends with migrations, `LiveWriter`, JSONL import/export, JSON evidence report | `rmcp`, `ratatui` |
+| `agent-trace-storage` | SQLite, PostgreSQL and MySQL/MariaDB backends with migrations, `LiveWriter`, JSONL import/export, JSON evidence report, causal graph page, ingest of shipped batches and sources | `rmcp`, `ratatui`, any HTTP client |
 | `agent-trace-mcp` | `McpSession` adapter (rmcp client over child-process stdio or in-process), `LabServer`, scripted (multi-)agent, shared policy gate, MCP `Proxy` | `ratatui`, any HTTP client |
 | `agent-trace-llm` | Anthropic Messages / OpenAI Chat Completions clients (reqwest + rustls), LLM agent loop with delegation | `ratatui` |
-| `agent-trace-net` | MCP streamable HTTP upstream for the proxy (rmcp's reqwest client + rustls/ring), URL and credential rules | `ratatui`; must not be a dependency of `agent-trace-mcp` |
+| `agent-trace-net` | MCP streamable HTTP upstream for the proxy (rmcp's reqwest client + rustls/ring), the `ship` client, URL and credential rules | `ratatui`; must not be a dependency of `agent-trace-mcp` |
 | `agent-trace-cli` | `agent-trace` binary, commands, ratatui explorer, redacting log writer | — |
+| `agent-trace-server` | Team server (axum): ingest with source tokens, read API, graph pages, web UI files (`ui/`, Angular + SwipyUI). See [server.md](server.md) | `ratatui`, any HTTP client |
 
 ## Data flow of a lab run
 
@@ -79,7 +80,7 @@ selected model and an optional system prompt. The CLI stores the replay, analyze
 
 ## Causal graph (`agent-trace graph`)
 
-`commands/graph.rs` fills `graph/template.html` with the redacted evidence report (the
+`agent_trace_storage::graph` fills `graph/template.html` with the redacted evidence report (the
 `export --format json` content, escaped for a `<script>` data block), `graph/graph.css` and
 `graph/graph.js`, and writes one HTML file. The viewer is plain JavaScript and SVG, no libraries:
 events are placed left to right by sequence, in one lane per agent and one per MCP server (for

@@ -1,0 +1,95 @@
+<div class="shell">
+  <syui-toolbar ariaLabel="agent-trace">
+    <div syui-toolbar-start class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="name">agent-trace</span>
+      <span class="tagline">team view</span>
+    </div>
+    <div syui-toolbar-center class="picker">
+      <span class="picker-label">Source</span>
+      <syui-select
+        [options]="sourceOptions()"
+        [value]="sourceId()"
+        (valueChange)="selectSource($event)"
+        placeholder="Choose a source"
+        emptyMessage="No sources yet"
+      />
+    </div>
+    <div syui-toolbar-end class="actions">
+      @if (source(); as s) {
+        <span class="seen">
+          last seen {{ s.last_seen_at ? (s.last_seen_at | date: 'medium') : 'never' }}
+          @if (s.last_ip) {
+            · {{ s.last_ip }}
+          }
+        </span>
+      }
+      <syui-button label="Refresh" variant="outlined" size="small" (onClick)="refresh()" />
+    </div>
+  </syui-toolbar>
+
+  @if (error(); as message) {
+    <syui-message class="error" severity="error" [text]="message" />
+  }
+
+  <main class="content">
+    <section class="traces" aria-label="Traces">
+      <syui-card title="Traces" [subtitle]="source() ? 'sent by ' + source()!.name : 'choose a source'">
+        @if (sources().length === 0) {
+          <syui-emptystate
+            header="No sources yet"
+            description="Add one with `agent-trace-server source add NAME`, then send traces with `agent-trace ship`."
+          />
+        } @else {
+          <syui-table
+            [value]="traces()"
+            dataKey="trace_id"
+            selectionMode="single"
+            [selection]="selected()"
+            (selectionChange)="select($event)"
+            [loading]="loading()"
+            rowHover
+            emptyMessage="This source has not sent traces yet."
+            ariaLabel="Traces of the source"
+          >
+            <syui-column field="name" header="Trace" sortable>
+              <ng-template let-row>
+                <span class="trace-name">{{ row.name }}</span>
+                @if (row.status !== 'completed') {
+                  <syui-tag class="state" [value]="row.status" [severity]="statusTag(row.status)" />
+                }
+              </ng-template>
+            </syui-column>
+            <syui-column field="max_severity" header="Severity" sortable>
+              <ng-template let-row>
+                <syui-tag [value]="row.max_severity ?? 'clean'" [severity]="severityTag(row.max_severity)" />
+              </ng-template>
+            </syui-column>
+            <syui-column field="findings" header="Findings" sortable />
+            <syui-column field="created_at" header="Started" sortable>
+              <ng-template let-row><span class="started">{{ row.created_at | date: 'MMM d, HH:mm' }}</span></ng-template>
+            </syui-column>
+          </syui-table>
+        }
+      </syui-card>
+    </section>
+
+    <section class="graph-panel" aria-label="Causal graph">
+      @if (selected(); as trace) {
+        <syui-card>
+          @if (graphUrl(); as url) {
+            <iframe
+              class="graph"
+              [src]="url"
+              sandbox="allow-scripts"
+              allow="clipboard-write"
+              title="Causal graph of the selected trace"
+            ></iframe>
+          }
+        </syui-card>
+      } @else {
+        <syui-emptystate header="No trace selected" description="Choose a trace to see its causal graph." />
+      }
+    </section>
+  </main>
+</div>
