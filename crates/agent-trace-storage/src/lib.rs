@@ -11,6 +11,7 @@ pub mod jsonl;
 pub mod live;
 #[cfg(feature = "mysql")]
 pub mod mysql;
+pub mod ocsf;
 pub mod otlp;
 #[cfg(feature = "postgres")]
 pub mod postgres;
@@ -31,6 +32,7 @@ pub use jsonl::{
     EvidenceReport, Imported, read_jsonl, write_json_report, write_jsonl, write_jsonl_signed,
 };
 pub use live::LiveWriter;
+pub use ocsf::{SiemFormat, ocsf_events, write_siem};
 pub use sarif::{SarifTrace, jsonl_event_lines, write_sarif};
 pub use shared::SharedTrace;
 pub use store::{Store, TraceSource, TraceSummary};

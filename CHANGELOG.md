@@ -41,6 +41,15 @@ The section of a version is used as the release notes of its GitHub release.
   for the attack actions and the canary. Model-free tests check that the recordings match their
   scenarios, import cleanly, produce the expected findings and that the suite runs. See
   examples/attack-library/README.md.
+- **SIEM export** (`export --format ocsf|splunk-hec|elastic`): findings as OCSF 1.9.0 Detection
+  Findings (class 2004) with severity, confidence, attempt status, rule, remediation, related
+  evidence events and observables (tool names, destination hosts), one per line.
+  `--include-events` adds every recorded event: tool calls and policy decisions as API Activity
+  (class 6003, policy outcome as `action_id`/`disposition_id`), all others as Base Events.
+  `splunk-hec` writes events for the HTTP Event Collector (`sourcetype` `agent-trace:ocsf`),
+  `elastic` an Elasticsearch `_bulk` body with ECS 9.5 fields (`event.kind` `alert` for
+  findings) and the OCSF event under `ocsf`. Redacted like every export; nothing is sent over
+  the network. See docs/siem.md.
 - **Rug-pull protection for MCP servers** (`agent-trace pins list|show|reset`, `[proxy]
   pin_tools`, on by default): the proxy pins every tool definition a server announces the first
   time (SHA-256 over the canonical JSON of name, title, description, schemas and annotations)
