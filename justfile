@@ -15,3 +15,4 @@ explore:
 
 update-golden:
     UPDATE_GOLDEN=1 cargo test -p agent-trace-cli --test demo_smoke deterministic
+    UPDATE_GOLDEN=1 cargo test -p agent-trace-cli --test attack_library recordings_match

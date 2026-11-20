@@ -330,6 +330,16 @@ Only the model's actions decide (`attempted`, `blocked`, `executed`); findings a
 recorded content are the same in every replay. Details and the suite format:
 [docs/replay.md](docs/replay.md).
 
+The **attack library** ([examples/attack-library](examples/attack-library)) is a ready-made
+suite of four published attacks: the GitHub MCP issue injection, the Supabase MCP
+support-ticket exfiltration, tool poisoning, and an EchoLeak-style injection through a
+retrieved email. Each is a reconstruction with fake data:
+
+```bash
+agent-trace --config examples/attack-library/agent-trace.toml \
+    replay suite examples/attack-library/suite.toml --provider anthropic
+```
+
 ---
 
 ## How it works
@@ -838,6 +848,7 @@ crates/agent-trace-mcp       rmcp adapter, local lab MCP server, scripted (multi
 crates/agent-trace-llm       Anthropic / OpenAI-compatible clients and the LLM agent loop (opt-in)
 crates/agent-trace-cli       the `agent-trace` binary and terminal explorer
 examples/local-lab           demo scenarios, fixture documents, expected findings
+examples/attack-library      recordings of published agent attacks as a replay suite
 examples/ci                  minimal trace for CI experiments
 fixtures/golden-traces       deterministic reference traces
 docs/                        architecture, event schema, security model, Jenkins guide, roadmap
