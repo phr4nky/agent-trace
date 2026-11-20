@@ -51,6 +51,14 @@ pub trait Rule: Send + Sync {
     fn default_severity(&self) -> Severity {
         Severity::Medium
     }
+    /// Taxonomy tags (OWASP LLM Top 10 2025, MITRE ATLAS, or your own) copied onto every
+    /// finding. Defaults to the central mapping in [`crate::taxonomy`] by rule ID.
+    fn tags(&self) -> Vec<String> {
+        crate::taxonomy::builtin_tags(self.id())
+            .iter()
+            .map(|t| (*t).to_owned())
+            .collect()
+    }
     fn evaluate(&self, ctx: &RuleContext<'_>) -> Vec<Finding>;
 }
 
@@ -161,6 +169,7 @@ impl FindingDraft {
             attempt_status: self.status,
             remediation: self.remediation.to_owned(),
             created_at: ctx.created_at,
+            tags: rule.tags(),
         }
     }
 }

@@ -109,6 +109,10 @@ pub struct Finding {
     pub remediation: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    /// Taxonomy tags of the rule (OWASP LLM Top 10, MITRE ATLAS, custom), see
+    /// [`crate::taxonomy`]. Absent in reports and stored findings from older versions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 impl Finding {
@@ -121,5 +125,17 @@ impl Finding {
             key.push_str(&id.to_string());
         }
         Uuid::new_v5(&DETERMINISTIC_NAMESPACE, key.as_bytes())
+    }
+
+    /// Fill in the built-in tags when the finding has none (findings stored or exported by
+    /// versions before tags existed). Custom rule findings are left as they are.
+    pub fn with_default_tags(mut self) -> Self {
+        if self.tags.is_empty() {
+            self.tags = crate::taxonomy::builtin_tags(&self.rule_id)
+                .iter()
+                .map(|t| (*t).to_owned())
+                .collect();
+        }
+        self
     }
 }

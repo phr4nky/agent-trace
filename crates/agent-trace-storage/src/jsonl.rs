@@ -288,7 +288,11 @@ pub fn evidence_report(record: &TraceRecord, findings: &[Finding]) -> EvidenceRe
                      Traces with execution_mode=simulated come from a scripted demo agent."
             .into(),
         trace: record.trace,
-        findings: findings.to_vec(),
+        findings: findings
+            .iter()
+            .cloned()
+            .map(Finding::with_default_tags)
+            .collect(),
         events: record.events,
     }
 }

@@ -5,7 +5,7 @@
 
 use agent_trace_core::{
     Event, ExecutionMode, Finding, Origin, Severity, ToolState, TraceRecord, TraceStatus,
-    TrustLevel,
+    TrustLevel, taxonomy,
 };
 use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind};
@@ -268,9 +268,16 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         &mut state,
     );
 
+    let detail_title = if app.focus == Focus::Findings && !app.findings.is_empty() {
+        "Finding and event detail (redacted)"
+    } else {
+        "Event detail (redacted)"
+    };
+    let mut detail = finding_lines(app);
+    detail.extend(detail_lines(app));
     frame.render_widget(
-        Paragraph::new(detail_lines(app))
-            .block(block("Event detail (redacted)", false))
+        Paragraph::new(detail)
+            .block(block(detail_title, false))
             .wrap(Wrap { trim: false }),
         detail_area,
     );
@@ -335,6 +342,34 @@ fn block(title: &str, focused: bool) -> Block<'static> {
         .borders(Borders::ALL)
         .border_style(style)
         .title(format!(" {title} "))
+}
+
+/// Details of the selected finding (findings focused): rule, outcome and taxonomy tags.
+fn finding_lines(app: &App) -> Vec<Line<'static>> {
+    if app.focus != Focus::Findings {
+        return Vec::new();
+    }
+    let Some(f) = app.findings.get(app.finding_idx) else {
+        return Vec::new();
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("{} {}", f.rule_id, f.title),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(format!(
+            "finding    : {}   status: {}   confidence: {}",
+            f.severity.as_str(),
+            f.attempt_status.as_str(),
+            f.confidence.as_str()
+        )),
+    ];
+    if !f.tags.is_empty() {
+        let tags: Vec<String> = f.tags.iter().map(|t| taxonomy::label(t)).collect();
+        lines.push(Line::from(format!("tags       : {}", tags.join(" · "))));
+    }
+    lines.push(Line::from(""));
+    lines
 }
 
 fn detail_lines(app: &App) -> Vec<Line<'static>> {
@@ -616,5 +651,28 @@ mod tests {
         assert!(text.contains("AT-001"));
         assert!(text.contains("AT-004"));
         assert!(text.contains("tool_call_requested"));
+        assert!(
+            !text.contains("LLM01:2025"),
+            "tags only with findings focused"
+        );
+    }
+
+    #[test]
+    fn finding_details_show_taxonomy_tags() {
+        let (rec, findings) = sample();
+        let mut app = App::new(rec, findings);
+        app.handle_key(KeyCode::Char('f'));
+        let idx = app
+            .findings
+            .iter()
+            .position(|f| f.rule_id == "AT-001")
+            .unwrap();
+        app.finding_idx = idx;
+        let mut terminal = Terminal::new(TestBackend::new(200, 50)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let text: String = buffer.content().iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("LLM01:2025 Prompt Injection"), "{text}");
+        assert!(text.contains("AML.T0051.001"));
     }
 }

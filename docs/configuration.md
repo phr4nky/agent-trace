@@ -46,6 +46,7 @@ severity = "high"
 tools = ["Bash"]
 arguments = { command = 'curl[^|]*\|\s*sh' }
 after_untrusted = true
+tags = ["LLM06:2025", "AML.T0053"]   # optional taxonomy tags
 
 [[canaries]]                      # decoy secrets (see docs/canaries.md)
 name = "aws-decoy"

@@ -198,6 +198,54 @@ fn json_report_is_redacted_and_labelled() {
     assert_eq!(v["redacted"], true);
     assert_eq!(v["trace"]["execution_mode"], "simulated");
     assert!(v["findings"].as_array().unwrap().len() >= 3);
+    let at001 = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["rule_id"] == "AT-001")
+        .unwrap();
+    assert_eq!(at001["tags"], json!(["LLM01:2025", "AML.T0051.001"]));
+}
+
+// Reports and JSONL exports written before taxonomy tags existed still parse and import.
+#[test]
+fn files_without_tags_still_import() {
+    let rec = synthetic("old");
+    let findings = Analyzer::default().analyze(&rec, rec.trace.created_at);
+    assert!(findings.iter().all(|f| !f.tags.is_empty()));
+
+    let mut buf = Vec::new();
+    write_json_report(&mut buf, &rec, &findings).unwrap();
+    let mut report: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+    for f in report["findings"].as_array_mut().unwrap() {
+        f.as_object_mut().unwrap().remove("tags");
+    }
+    let old: agent_trace_storage::EvidenceReport = serde_json::from_value(report).unwrap();
+    assert!(old.findings.iter().all(|f| f.tags.is_empty()));
+    assert!(!old.findings.is_empty());
+
+    let mut buf = Vec::new();
+    write_jsonl(&mut buf, &rec, &findings).unwrap();
+    let text = String::from_utf8(buf).unwrap();
+    let old_lines: Vec<String> = text
+        .lines()
+        .map(|l| {
+            let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
+            if v["record_type"] == "finding" {
+                v.as_object_mut().unwrap().remove("tags");
+            }
+            v.to_string()
+        })
+        .filter(|l| !l.contains("\"record_type\":\"integrity\""))
+        .collect();
+    assert!(
+        old_lines
+            .iter()
+            .any(|l| l.contains("\"record_type\":\"finding\""))
+    );
+    let imported = read_jsonl(old_lines.join("\n").as_bytes()).unwrap();
+    assert_eq!(imported.record.events.len(), rec.events.len());
+    assert_eq!(imported.ignored_findings, findings.len());
 }
 
 // Regression: an external recorder may store full-length content. Import truncates it for

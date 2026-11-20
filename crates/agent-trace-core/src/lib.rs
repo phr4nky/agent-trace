@@ -10,6 +10,7 @@ pub mod provenance;
 pub mod recorder;
 pub mod redact;
 pub mod rules;
+pub mod taxonomy;
 
 pub use event::{
     DEFAULT_AGENT, Event, EventKind, ExecutionMode, Origin, SCHEMA_VERSION, ToolState, Trace,

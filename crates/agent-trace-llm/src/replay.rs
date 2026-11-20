@@ -178,6 +178,7 @@ mod tests {
             attempt_status: status,
             remediation: String::new(),
             created_at: OffsetDateTime::UNIX_EPOCH,
+            tags: vec![],
         }
     }
 

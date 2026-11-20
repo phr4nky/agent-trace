@@ -61,6 +61,16 @@ The section of a version is used as the release notes of its GitHub release.
   report is explicitly not a compliance statement and lists what it does not prove. A file
   that fails verification is marked `FAILED` and the command exits with 1. Payloads are never
   included. `--output` creates a private file. See docs/compliance-evidence.md.
+- **Taxonomy tags:** every built-in rule is mapped to the OWASP Top 10 for LLM Applications 2025
+  (`LLM01:2025` …) and to MITRE ATLAS techniques (`AML.T0051.001` …), including AT-008 (MCP tool
+  definition changed). Findings carry the tags in the JSON report and exports (`tags`, omitted
+  when empty), in SARIF (`properties.tags` of rules and results, next to `security`, for
+  filtering in GitHub Code Scanning), in the SIEM exports (OCSF `finding_info.types` after the
+  rule ID and `unmapped.tags`, ECS `tags`), in `analyze` / `import` / `trace show`, in the explorer's
+  finding details and on the graph's finding cards. Declarative rules accept an optional
+  `tags = [...]`; Rust rules can override `Rule::tags`. Older reports and stored findings
+  without tags still load; stored findings of built-in rules get their tags when loaded. The
+  mapping and its reasoning are in docs/rules.md.
 - **Rug-pull protection for MCP servers** (`agent-trace pins list|show|reset`, `[proxy]
   pin_tools`, on by default): the proxy pins every tool definition a server announces the first
   time (SHA-256 over the canonical JSON of name, title, description, schemas and annotations)

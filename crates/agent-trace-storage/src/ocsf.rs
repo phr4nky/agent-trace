@@ -348,7 +348,10 @@ fn finding_event(redactor: &Redactor, record: &TraceRecord, f: &Finding) -> Valu
     finding_info.insert("uid".into(), json!(f.finding_id.to_string()));
     finding_info.insert("title".into(), json!(title));
     finding_info.insert("desc".into(), json!(desc));
-    finding_info.insert("types".into(), json!([f.rule_id]));
+    // The rule ID first, then its taxonomy tags (OWASP LLM Top 10, MITRE ATLAS).
+    let mut types = vec![f.rule_id.clone()];
+    types.extend(f.tags.iter().cloned());
+    finding_info.insert("types".into(), json!(types));
     finding_info.insert("created_time".into(), json!(epoch_ms(f.created_at)));
     finding_info.insert(
         "analytic".into(),
@@ -413,22 +416,23 @@ fn finding_event(redactor: &Redactor, record: &TraceRecord, f: &Finding) -> Valu
     if !obs.is_empty() {
         obj.insert("observables".into(), Value::Array(obs));
     }
-    obj.insert(
-        "unmapped".into(),
-        json!({
-            "trace_id": record.trace.trace_id.to_string(),
-            "trace_name": record.trace.name,
-            "execution_mode": record.trace.execution_mode.as_str(),
-            "rule_id": f.rule_id,
-            "rule_version": f.rule_version,
-            "attempt_status": f.attempt_status.as_str(),
-            "evidence_event_ids": f
-                .evidence_event_ids
-                .iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>(),
-        }),
-    );
+    let mut unmapped = json!({
+        "trace_id": record.trace.trace_id.to_string(),
+        "trace_name": record.trace.name,
+        "execution_mode": record.trace.execution_mode.as_str(),
+        "rule_id": f.rule_id,
+        "rule_version": f.rule_version,
+        "attempt_status": f.attempt_status.as_str(),
+        "evidence_event_ids": f
+            .evidence_event_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>(),
+    });
+    if !f.tags.is_empty() {
+        unmapped["tags"] = json!(f.tags);
+    }
+    obj.insert("unmapped".into(), unmapped);
     Value::Object(obj)
 }
 
@@ -666,6 +670,9 @@ pub fn ecs_document(ocsf: Value) -> Value {
                 "ruleset": PRODUCT,
             }),
         );
+        if let Some(tags) = ocsf["unmapped"].get("tags") {
+            doc.insert("tags".into(), tags.clone());
+        }
     }
     if !hosts.is_empty() {
         doc.insert("related".into(), json!({ "hosts": hosts }));
@@ -824,6 +831,14 @@ mod tests {
             assert_eq!(v["confidence_id"], confidence_id(f.confidence).0);
             assert_eq!(v["finding_info"]["uid"], f.finding_id.to_string());
             assert_eq!(v["finding_info"]["analytic"]["uid"], f.rule_id);
+            let mut types = vec![f.rule_id.clone()];
+            types.extend(f.tags.iter().cloned());
+            assert_eq!(v["finding_info"]["types"], json!(types));
+            if f.tags.is_empty() {
+                assert!(v["unmapped"]["tags"].is_null());
+            } else {
+                assert_eq!(v["unmapped"]["tags"], json!(f.tags));
+            }
             assert_eq!(v["finding_info"]["created_time"], epoch_ms(f.created_at));
             assert_eq!(v["status_detail"], f.attempt_status.as_str());
             assert_eq!(v["metadata"]["uid"], f.finding_id.to_string());
@@ -967,6 +982,7 @@ mod tests {
                     doc["ocsf"]["finding_info"]["analytic"]["uid"]
                 );
                 assert!(doc["rule"]["name"].is_string());
+                assert_eq!(doc["tags"], doc["ocsf"]["unmapped"]["tags"]);
             } else {
                 assert_eq!(doc["event"]["kind"], "event");
                 assert!(doc["rule"].is_null());

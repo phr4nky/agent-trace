@@ -598,6 +598,8 @@ jobs:
   to also fail the job; the SARIF file is written either way.
 - Severity maps to GitHub's levels (`high`/`critical` → error, `medium` → warning) and to
   `security-severity` (critical 9.5, high 8.0, medium 5.5, low 3.0).
+- Rules and results carry [taxonomy tags](#detection-rules) in `properties.tags` (`security`,
+  `ai-agent`, then OWASP LLM Top 10 and MITRE ATLAS IDs such as `LLM01:2025` or `AML.T0053`).
 - Alert fingerprints come from the rule, the file and the evidence steps, not from trace IDs, so
   re-recording the same behavior updates the same alert instead of opening a new one.
 - For a stored trace: `agent-trace export <id> --format sarif --artifact-uri traces/x.jsonl`
@@ -810,16 +812,24 @@ Mapping, Collector setup and limits: [docs/otlp.md](docs/otlp.md).
 
 ## Detection rules
 
-| Rule | Detects | Status |
-|---|---|---|
-| `AT-001` | Untrusted content contains instructions to change the agent's behavior (override task, call a tool, send data somewhere, hide it from the user, …) | `suspected` |
-| `AT-002` | A **privileged tool** was requested with an explicit causal path back to untrusted content (a trust-boundary crossing, including via a model's context) | `attempted` / `blocked` / `executed` |
-| `AT-003` | An outbound tool targets a **non-allowlisted destination** while sensitive (redacted) data is among its causes | `attempted` / `blocked` / `executed` |
-| `AT-004` | A tool call was **denied by policy** (reported as `executed` if an execution was still recorded) | `blocked` / `executed` |
-| `AT-005` | Untrusted content **impersonates system/developer authority** ("SYSTEM:", `<system>`, "ignore previous instructions", …) | `suspected` |
-| `AT-006` | Untrusted content seen by **one agent** reached a privileged action of **another agent** (cross-agent taint) | `attempted` / `blocked` / `executed` |
-| `AT-007` | A tool call carried a **canary token**, a decoy secret you planted: evidence of a leak attempt, not an indicator | `attempted` / `blocked` / `executed` |
-| `AT-008` | An MCP server **changed a tool's description or schema** after the proxy pinned it (rug pull, tool poisoning), or added a tool later | `suspected` / `attempted` / `blocked` / `executed` |
+| Rule | Detects | Status | Tags (OWASP LLM 2025, MITRE ATLAS) |
+|---|---|---|---|
+| `AT-001` | Untrusted content contains instructions to change the agent's behavior (override task, call a tool, send data somewhere, hide it from the user, …) | `suspected` | `LLM01:2025` `AML.T0051.001` |
+| `AT-002` | A **privileged tool** was requested with an explicit causal path back to untrusted content (a trust-boundary crossing, including via a model's context) | `attempted` / `blocked` / `executed` | `LLM01:2025` `LLM06:2025` `AML.T0053` |
+| `AT-003` | An outbound tool targets a **non-allowlisted destination** while sensitive (redacted) data is among its causes | `attempted` / `blocked` / `executed` | `LLM02:2025` `AML.T0086` |
+| `AT-004` | A tool call was **denied by policy** (reported as `executed` if an execution was still recorded) | `blocked` / `executed` | `LLM06:2025` |
+| `AT-005` | Untrusted content **impersonates system/developer authority** ("SYSTEM:", `<system>`, "ignore previous instructions", …) | `suspected` | `LLM01:2025` `AML.T0051.001` `AML.T0073` |
+| `AT-006` | Untrusted content seen by **one agent** reached a privileged action of **another agent** (cross-agent taint) | `attempted` / `blocked` / `executed` | `LLM01:2025` `LLM06:2025` `AML.T0053` `AML.T0143` |
+| `AT-007` | A tool call carried a **canary token**, a decoy secret you planted: evidence of a leak attempt, not an indicator | `attempted` / `blocked` / `executed` | `LLM02:2025` `AML.T0086` |
+| `AT-008` | An MCP server **changed a tool's description or schema** after the proxy pinned it (rug pull, tool poisoning), or added a tool later | `suspected` / `attempted` / `blocked` / `executed` | `LLM03:2025` `AML.T0109` `AML.T0110.000` |
+
+**Taxonomy tags** map each rule to the [OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/)
+and to [MITRE ATLAS](https://atlas.mitre.org/) techniques. Findings carry them in the JSON report
+and exports (`tags`), in SARIF (`properties.tags` of rules and results, next to `security`, so
+GitHub Code Scanning can filter by them), in the SIEM exports (OCSF, Splunk HEC, Elastic), in
+`analyze` / `trace show`, in the explorer's finding
+details and on the graph's finding cards. The mapping and its reasoning:
+[docs/rules.md](docs/rules.md#taxonomy-tags).
 
 **Canary tokens** turn a suspicion into evidence. Plant a decoy secret (a fake AWS key in
 `.env`, a token in a database row) and list it in `agent-trace.toml`, ideally through an
@@ -847,6 +857,7 @@ severity = "high"
 tools = ["Bash", "run_command*"]
 arguments = { command = 'curl[^|]*\|\s*(ba)?sh' }
 after_untrusted = true        # only after lower-trust content, like AT-002
+tags = ["LLM06:2025", "AML.T0053", "CORP-shell"]   # optional taxonomy tags
 ```
 
 Rules can also match lower-trust content (`on = "content"`). Rust users implement the `Rule`
