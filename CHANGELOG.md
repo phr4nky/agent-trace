@@ -97,6 +97,18 @@ The section of a version is used as the release notes of its GitHub release.
   upstream chain and the findings; findings show their remediation and evidence events.
   Events that are evidence for a finding carry a severity dot, and ←/→ step through the events.
 
+### Fixed
+
+- Redaction missed credentials in command lines, so the Claude Code hook stored them in plain
+  text with the Bash command: `curl -u user:password` (also `--user`, `-U`, `--proxy-user`),
+  `mysql -pPASSWORD` (mysql, mysqldump, mysqladmin, mysqlimport, mariadb), `docker login -p`
+  (also podman, nerdctl, buildah), `--password`/`--passwd`/`--pass VALUE`, `sshpass -p`, and
+  `Cookie:`/`Set-Cookie:` headers and `curl -b`/`--cookie name=value`. They are now replaced
+  with `[REDACTED:cli_credentials]` and `[REDACTED:cookie]`; the user name stays. Flags that
+  only look alike (`-p` as a port or for `mkdir`, `-u 1000:1000`, `--password-stdin`, a cookie
+  file) are left alone. Traces recorded before keep their old form; delete or re-import them
+  if they may hold such commands.
+
 ## [1.5.0] - 2026-11-17
 
 Findings in GitHub Code Scanning, exports that prove they are unchanged, control over what is

@@ -54,6 +54,11 @@ fn looks_like_token(value: &str) -> bool {
             .any(|c| c.is_ascii_digit() || "._~+/=-".contains(c))
 }
 
+/// `user:group` IDs (`docker run -u 1000:1000`) are not passwords.
+fn not_numeric(value: &str) -> bool {
+    !value.chars().all(|c| c.is_ascii_digit())
+}
+
 fn patterns() -> &'static [Pattern] {
     static PATTERNS: OnceLock<Vec<Pattern>> = OnceLock::new();
     PATTERNS.get_or_init(|| {
@@ -106,6 +111,47 @@ fn patterns() -> &'static [Pattern] {
                 // Greedy up to the *last* '@' of the authority: drivers split there, so a
                 // password with an unencoded '@' must be covered completely.
                 r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]*:([^\s/]+)@",
+                1,
+            ),
+            // Command lines (the Claude Code hook records every Bash command): credentials in
+            // flags. Only flags whose meaning is unambiguous; `-p` alone means a port or
+            // "parents" for most tools, so it counts only after mysql/mariadb and `login`.
+            checked(
+                "cli_credentials",
+                // curl -u/--user/-U/--proxy-user user:password (also wget-style `--user=`).
+                r#"(?:^|\s)(?:-u|-U|--user|--proxy-user)(?:\s+|=)?['"]?[^\s:'"]+:([^\s'"]+)"#,
+                1,
+                not_numeric,
+            ),
+            p(
+                "cli_credentials",
+                // mysql -pSECRET (the attached form; `-p SECRET` asks and names a database).
+                r#"\b(?i:mysql|mysqldump|mysqladmin|mysqlimport|mariadb|mariadb-dump)\b[^\n|;&]*?\s-p['"]?([^\s'"]+)"#,
+                1,
+            ),
+            p(
+                "cli_credentials",
+                r#"\b(?:docker|podman|nerdctl|buildah)\s+login\b[^\n|;&]*?\s-p(?:\s+|=)?['"]?([^\s'"-][^\s'"]*)"#,
+                1,
+            ),
+            p(
+                "cli_credentials",
+                // --password SECRET / --passwd / --pass (not --password-stdin).
+                r#"(?:^|\s)--(?:password|passwd|pass)(?:\s+|=)['"]?([^\s'"-][^\s'"]*)"#,
+                1,
+            ),
+            p("cli_credentials", r#"\bsshpass\s+-p\s*['"]?([^\s'"]+)"#, 1),
+            // Cookie / Set-Cookie headers and curl -b/--cookie name=value (a file name has no
+            // `=`): session cookies are credentials.
+            checked(
+                "cookie",
+                r#"(?i)\b(?:set-)?cookie\s*:\s*([^\s"';]+(?:;\s*[^\s"';]+)*)"#,
+                1,
+                |v| v.contains('='),
+            ),
+            p(
+                "cookie",
+                r#"(?:^|\s)(?:-b|--cookie)\s+['"]?([^\s'"]*=[^\s'"]*)"#,
                 1,
             ),
             p(
@@ -524,6 +570,98 @@ mod tests {
                 !out.contains("abcdefghijklmnopqrstuvwxyz") && !out.contains("dXNlcjpwYXNzd29yZA"),
                 "{out}"
             );
+        }
+    }
+
+    /// Shell commands (the Claude Code hook records every Bash command as free text) carry
+    /// credentials in flags and headers, not only in `key=value` form.
+    #[test]
+    fn redacts_credentials_in_command_lines() {
+        let r = Redactor::new();
+        for (command, secret) in [
+            (
+                "curl -u admin:S3cr3tPassw0rdA https://ci.example.com/api",
+                "S3cr3tPassw0rdA",
+            ),
+            (
+                "curl --user 'admin:S3cr3tPassw0rdB' https://x.example",
+                "S3cr3tPassw0rdB",
+            ),
+            (
+                "curl -U proxy:S3cr3tPassw0rdC -x http://p:3128 https://x",
+                "S3cr3tPassw0rdC",
+            ),
+            (
+                "mysql -h db -P 3306 -u root -pS3cr3tPassw0rdD app",
+                "S3cr3tPassw0rdD",
+            ),
+            (
+                "mysqldump -uroot -p'S3cr3tPassw0rdE' app > a.sql",
+                "S3cr3tPassw0rdE",
+            ),
+            (
+                "docker login -u bot -p S3cr3tPassw0rdF registry.example.com",
+                "S3cr3tPassw0rdF",
+            ),
+            (
+                "podman login --password S3cr3tPassw0rdG quay.io",
+                "S3cr3tPassw0rdG",
+            ),
+            (
+                "helm repo add r https://r --username u --password S3cr3tPassw0rdH",
+                "S3cr3tPassw0rdH",
+            ),
+            (
+                "sshpass -p S3cr3tPassw0rdI ssh deploy@host",
+                "S3cr3tPassw0rdI",
+            ),
+            (
+                "curl -H \"Cookie: session=S3cr3tPassw0rdJ; theme=dark\" https://app",
+                "S3cr3tPassw0rdJ",
+            ),
+            (
+                "curl -H 'cookie: a=1; sid=S3cr3tPassw0rdK' https://app",
+                "S3cr3tPassw0rdK",
+            ),
+            (
+                "Set-Cookie: sid=S3cr3tPassw0rdL; Path=/; HttpOnly",
+                "S3cr3tPassw0rdL",
+            ),
+            (
+                "curl -b 'sid=S3cr3tPassw0rdM' https://app",
+                "S3cr3tPassw0rdM",
+            ),
+            (
+                "curl --cookie \"sid=S3cr3tPassw0rdN\" https://app",
+                "S3cr3tPassw0rdN",
+            ),
+        ] {
+            let (out, report) = r.redact_str(command);
+            assert!(!out.contains(secret), "not redacted: {command} -> {out}");
+            assert!(report.redactions >= 1, "{command}");
+            let (again, rep) = r.redact_str(&out);
+            assert_eq!(again, out, "idempotent");
+            assert_eq!(rep.redactions, 0);
+        }
+        // The user name stays readable.
+        let (out, _) = r.redact_str("curl -u admin:S3cr3tPassw0rdA https://x");
+        assert_eq!(out, "curl -u admin:[REDACTED:cli_credentials] https://x");
+        // Flags that look alike but hold no secret.
+        for text in [
+            "git push -u origin main",
+            "docker run -u 1000:1000 -p 8080:80 nginx",
+            "mkdir -p a/b && sort -u list.txt",
+            "ssh -p 2222 deploy@host",
+            "mysql -u root -p app",
+            "mysql -h db -P 3306 -u root app",
+            "docker login -u bot --password-stdin registry.example.com",
+            "git checkout -b feature/cookie-banner",
+            "curl -b cookies.txt https://app",
+            "The cookie banner is shown once.",
+        ] {
+            let (out, report) = r.redact_str(text);
+            assert_eq!(out, text, "over-redacted");
+            assert_eq!(report.redactions, 0, "{text}");
         }
     }
 
