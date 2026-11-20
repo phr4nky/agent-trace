@@ -4,6 +4,7 @@ mod canary;
 pub mod custom;
 mod exfiltration;
 mod injection;
+pub mod tool_pins;
 mod trust_boundary;
 
 use time::OffsetDateTime;
@@ -19,6 +20,10 @@ pub use custom::{CustomRule, CustomRuleConfig, RuleTarget};
 pub use exfiltration::{BlockedActionRule, ExfiltrationRule};
 pub use injection::{
     AuthoritySpoofingRule, CONTENT_INDICATORS_KEY, PromptInjectionRule, record_content_indicators,
+};
+pub use tool_pins::{
+    TOOL_PINS_ACTION_BLOCKED, TOOL_PINS_ACTION_KEY, TOOL_PINS_ACTION_OBSERVED, TOOL_PINS_ADDED_KEY,
+    TOOL_PINS_CHANGED, TOOL_PINS_CHANGED_KEY, TOOL_PINS_KEY, ToolPinRule,
 };
 pub use trust_boundary::{
     CrossAgentTaintRule, LINK_BASIS_KEY, LINK_BASIS_SESSION_CONTEXT, TAINT_SOURCE_KEY,
@@ -72,6 +77,7 @@ impl Analyzer {
                 Box::new(AuthoritySpoofingRule),
                 Box::new(CrossAgentTaintRule),
                 Box::new(CanaryLeakRule),
+                Box::new(ToolPinRule),
             ],
             policy,
         }

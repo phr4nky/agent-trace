@@ -7,6 +7,7 @@
 
 pub mod adapter;
 pub mod lab;
+pub mod pins;
 pub mod proxy;
 pub mod replay;
 pub mod server;
@@ -17,6 +18,7 @@ pub use lab::{
     begin_delegation, end_delegation, gated_tool_call, lab_recorder, locate_lab_dir, record_gate,
     record_session_metadata, run_scenario, run_scenario_with,
 };
+pub use pins::PinStore;
 pub use proxy::{Proxy, ProxyConfig, ProxyMode, apply_mode};
 pub use replay::{RecordedCall, ReplayFixture, ReplayServer};
 pub use server::{LabServer, resolve_fixture_path, serve_stdio};

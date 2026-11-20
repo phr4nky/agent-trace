@@ -1,6 +1,7 @@
 # Writing rules
 
-agent-trace ships seven rules (AT-001 … AT-007; AT-007 reports [canary tokens](canaries.md)). Add your own in two ways:
+agent-trace ships eight rules (AT-001 … AT-008; AT-007 reports [canary tokens](canaries.md), AT-008
+changed [MCP tool definitions](proxy.md#tool-pinning-rug-pulls-and-tool-poisoning)). Add your own in two ways:
 
 - **Declarative rules** in `agent-trace.toml`: no code, no rebuild. They run in every command
   that analyzes (`analyze`, `import`, `demo run`, the proxy, the hooks, `replay`, `graph`).

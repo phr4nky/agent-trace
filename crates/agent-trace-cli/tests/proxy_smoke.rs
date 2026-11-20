@@ -280,3 +280,80 @@ fn http_upstreams_must_use_https() {
     );
     assert_eq!(out.status.code(), Some(1));
 }
+
+fn stdout_of(out: Output) -> String {
+    assert!(
+        out.status.success(),
+        "exit {:?}\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn tool_names(c: &mut Client, id: u64) -> Vec<String> {
+    c.send(json!({"jsonrpc": "2.0", "id": id, "method": "tools/list"}));
+    let mut names: Vec<String> = c.recv(id)["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn tool_pins_are_kept_per_server_and_a_changed_tool_is_hidden_and_denied() {
+    let data = tempfile::tempdir().unwrap();
+    let d = data.path();
+
+    // The first session pins the lab server's three tools.
+    let mut c = Client::start(d, "lab", "enforce", &[]);
+    assert_eq!(tool_names(&mut c, 2).len(), 3);
+    c.close();
+    let list = stdout_of(bin(d, &["pins", "list"]));
+    assert!(list.contains("lab  3 tool(s)"), "{list}");
+    let show = stdout_of(bin(d, &["pins", "show", "lab"]));
+    assert!(show.contains("read_document"), "{show}");
+
+    // Simulate a rug pull: the pinned definition of read_document no longer matches.
+    let pin_path = d.join("pins").join("lab.json");
+    let mut pins: Value =
+        serde_json::from_str(&std::fs::read_to_string(&pin_path).unwrap()).unwrap();
+    pins["tools"]["read_document"]["hash"] = json!(format!("sha256:{}", "0".repeat(64)));
+    pins["tools"]["read_document"]["description"] = json!("Read a document (old wording).");
+    std::fs::write(&pin_path, serde_json::to_string_pretty(&pins).unwrap()).unwrap();
+
+    let mut c = Client::start(d, "lab", "enforce", &[]);
+    let names = tool_names(&mut c, 2);
+    assert!(!names.contains(&"read_document".to_owned()), "{names:?}");
+    assert_eq!(names.len(), 2);
+    let read = c.call(3, "read_document", json!({"path": "injected-readme.md"}));
+    assert_eq!(read["result"]["isError"], true, "{read}");
+    let text = read["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("changed since it was pinned"), "{text}");
+    c.close();
+    let analysis = analyze_latest(d);
+    assert!(analysis.contains("AT-008"), "{analysis}");
+
+    // Accepting the change: the next session pins the current definition again.
+    let reset = stdout_of(bin(d, &["pins", "reset", "lab", "--tool", "read_document"]));
+    assert!(reset.contains("removed 1 pin(s) of lab"), "{reset}");
+    let mut c = Client::start(d, "lab", "enforce", &[]);
+    assert_eq!(tool_names(&mut c, 2).len(), 3);
+    c.close();
+    assert!(!bin(d, &["pins", "show", "nope"]).status.success());
+}
+
+#[test]
+fn tool_pinning_can_be_turned_off() {
+    let data = tempfile::tempdir().unwrap();
+    let d = data.path();
+    std::fs::write(d.join("agent-trace.toml"), "[proxy]\npin_tools = false\n").unwrap();
+    let config = d.join("agent-trace.toml");
+    let mut c = Client::start(d, "lab", "enforce", &["--config", config.to_str().unwrap()]);
+    assert_eq!(tool_names(&mut c, 2).len(), 3);
+    c.close();
+    assert!(!d.join("pins").exists());
+}
