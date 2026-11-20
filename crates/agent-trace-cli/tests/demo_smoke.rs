@@ -1139,6 +1139,106 @@ fn otlp_import_maps_genai_spans() {
     assert_eq!(out.status.code(), Some(1));
 }
 
+/// A trace whose spans the Collector wrote to two files (rotation, or an import while the
+/// agent still ran): never mapped from half its spans without saying so.
+#[test]
+fn otlp_trace_split_across_files_is_not_silently_truncated() {
+    let dir = tempfile::tempdir().unwrap();
+    let example =
+        std::fs::read_to_string(repo().join("examples/otlp/agent-injection.otlp.jsonl")).unwrap();
+    // The first line holds the single-agent trace whose injection reaches a shell (AT-002).
+    let request: serde_json::Value = serde_json::from_str(example.lines().next().unwrap()).unwrap();
+    let scope = &request["resourceSpans"][0]["scopeSpans"][0];
+    let mut spans = scope["spans"].as_array().unwrap().clone();
+    spans.sort_by_key(|s| {
+        s["startTimeUnixNano"]
+            .as_str()
+            .unwrap()
+            .parse::<u128>()
+            .unwrap()
+    });
+    let write = |name: &str, part: &[serde_json::Value]| {
+        let mut r = request.clone();
+        r["resourceSpans"] = serde_json::json!([request["resourceSpans"][0].clone()]);
+        r["resourceSpans"][0]["scopeSpans"] =
+            serde_json::json!([{"scope": scope["scope"].clone(), "spans": part}]);
+        let path = dir.path().join(name);
+        std::fs::write(&path, format!("{r}\n")).unwrap();
+        path.to_str().unwrap().to_owned()
+    };
+    let half = spans.len() / 2;
+    let (p1, p2, whole) = (
+        write("part1.jsonl", &spans[..half]),
+        write("part2.jsonl", &spans[half..]),
+        write("whole.jsonl", &spans),
+    );
+    let import = |data: &Path, files: &[&str], extra: &[&str]| {
+        let mut args = vec!["import", "--format", "otlp"];
+        for f in files {
+            args.extend(["--input", f]);
+        }
+        args.extend(extra);
+        bin(data, &args)
+    };
+    let events = |data: &Path| {
+        let list = ok(&bin(data, &["trace", "list", "--no-color"]));
+        list.lines()
+            .find(|l| l.contains("otel/"))
+            .and_then(|l| {
+                // The name may hold spaces: the event count follows the status.
+                let cols: Vec<&str> = l.split_whitespace().collect();
+                let at = cols.iter().position(|c| *c == "completed")?;
+                cols.get(at + 1).map(|c| (*c).to_owned())
+            })
+            .unwrap()
+    };
+
+    // Both parts in one call: the same trace as from one file.
+    let a = tempfile::tempdir().unwrap();
+    let out = import(a.path(), &[&p1, &p2], &["--fail-on", "high"]);
+    assert_eq!(out.status.code(), Some(2), "AT-002 is high");
+    let b = tempfile::tempdir().unwrap();
+    ok(&import(b.path(), &[&whole], &[]));
+    assert_eq!(events(a.path()), events(b.path()));
+
+    // Part 1, then part 2 alone: refused (exit 1), not skipped, and it says what to do.
+    let c = tempfile::tempdir().unwrap();
+    ok(&import(c.path(), &[&p1], &[]));
+    let partial = events(c.path());
+    let out = import(c.path(), &[&p2], &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("imported before from other spans"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("--replace"), "{stderr}");
+    assert_eq!(events(c.path()), partial, "nothing changed");
+    // ...and replaced when all parts come together.
+    let out = ok(&import(c.path(), &[&p1, &p2], &["--replace"]));
+    assert!(out.contains("replaced trace"), "{out}");
+    assert_eq!(events(c.path()), events(b.path()));
+
+    // Part 1, then the grown file: replaced without --replace (it holds every span).
+    let d = tempfile::tempdir().unwrap();
+    ok(&import(d.path(), &[&p1], &[]));
+    let out = import(d.path(), &[&whole], &["--fail-on", "high"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "the findings of the new spans count"
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("span(s) more than before"));
+    assert_eq!(events(d.path()), events(b.path()));
+    // A part that adds nothing is skipped as before.
+    let out = ok(&import(d.path(), &[&p2], &[]));
+    assert!(out.contains("skipped OTel trace"), "{out}");
+
+    // --replace is for OTLP.
+    let out = bin(d.path(), &["import", "--input", &p1, "--replace"]);
+    assert_eq!(out.status.code(), Some(1));
+}
+
 #[test]
 fn siem_exports_are_ndjson() {
     let data = tempfile::tempdir().unwrap();

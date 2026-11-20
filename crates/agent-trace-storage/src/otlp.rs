@@ -206,7 +206,46 @@ fn collect_spans(request: &Value, spans: &mut Vec<Span>) -> Result<(), StorageEr
 }
 
 /// Parse OTLP/JSON: one request, or one request per line.
-pub fn read_otlp(mut input: impl Read) -> Result<Vec<OtlpTrace>, StorageError> {
+pub fn read_otlp(input: impl Read) -> Result<Vec<OtlpTrace>, StorageError> {
+    read_otlp_all([input])
+}
+
+/// Parse several OTLP/JSON files as one: spans are grouped by trace across all of them, so a
+/// trace whose spans the Collector wrote to more than one file (rotation, an import while the
+/// agent was still running) is mapped from all its spans. Each file has the size limit of
+/// [`read_otlp`]; the span limit applies to all files together.
+pub fn read_otlp_all<R: Read>(
+    inputs: impl IntoIterator<Item = R>,
+) -> Result<Vec<OtlpTrace>, StorageError> {
+    let mut spans = Vec::new();
+    for input in inputs {
+        collect_file(input, &mut spans)?;
+    }
+    if spans.is_empty() {
+        return Err(err("no spans found"));
+    }
+    let mut by_trace: BTreeMap<String, Vec<Span>> = BTreeMap::new();
+    let mut seen = std::collections::HashSet::new();
+    for s in spans {
+        // A span in two inputs (overlapping files, a file passed twice) is mapped once.
+        if seen.insert((s.trace_id.clone(), s.span_id.clone())) {
+            by_trace.entry(s.trace_id.clone()).or_default().push(s);
+        }
+    }
+    by_trace.into_values().map(map_trace).collect()
+}
+
+/// The OTel span IDs an imported trace was mapped from (`otel_span_id` of its events).
+pub fn span_ids(record: &TraceRecord) -> std::collections::BTreeSet<String> {
+    record
+        .events
+        .iter()
+        .filter_map(|e| e.metadata.get("otel_span_id").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn collect_file(mut input: impl Read, spans: &mut Vec<Span>) -> Result<(), StorageError> {
     let mut text = String::new();
     (&mut input)
         .take(MAX_IMPORT_BYTES + 1)
@@ -215,9 +254,8 @@ pub fn read_otlp(mut input: impl Read) -> Result<Vec<OtlpTrace>, StorageError> {
     if text.len() as u64 > MAX_IMPORT_BYTES {
         return Err(err(format!("file exceeds {MAX_IMPORT_BYTES} bytes")));
     }
-    let mut spans = Vec::new();
     match serde_json::from_str::<Value>(&text) {
-        Ok(request) => collect_spans(&request, &mut spans)?,
+        Ok(request) => collect_spans(&request, spans)?,
         Err(_) => {
             for (i, line) in text
                 .lines()
@@ -229,7 +267,7 @@ pub fn read_otlp(mut input: impl Read) -> Result<Vec<OtlpTrace>, StorageError> {
                         line: i + 1,
                         message: format!("not OTLP JSON: {e}"),
                     })?;
-                collect_spans(&request, &mut spans).map_err(|e| match e {
+                collect_spans(&request, spans).map_err(|e| match e {
                     StorageError::Import { message, .. } => StorageError::Import {
                         line: i + 1,
                         message,
@@ -239,14 +277,7 @@ pub fn read_otlp(mut input: impl Read) -> Result<Vec<OtlpTrace>, StorageError> {
             }
         }
     }
-    if spans.is_empty() {
-        return Err(err("no spans found"));
-    }
-    let mut by_trace: BTreeMap<String, Vec<Span>> = BTreeMap::new();
-    for s in spans {
-        by_trace.entry(s.trace_id.clone()).or_default().push(s);
-    }
-    by_trace.into_values().map(map_trace).collect()
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

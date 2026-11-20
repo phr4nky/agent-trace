@@ -225,8 +225,14 @@ enum Command {
     Import {
         #[arg(long, value_enum, default_value = "jsonl")]
         format: ImportFormat,
-        #[arg(long, value_name = "PATH")]
-        input: PathBuf,
+        /// The file to import. OTLP: repeat it to import files that hold spans of the same
+        /// traces (Collector file rotation); their spans are grouped by trace.
+        #[arg(long, value_name = "PATH", required = true)]
+        input: Vec<PathBuf>,
+        /// OTLP: replace traces that were imported before, also when this import does not
+        /// hold all of their spans.
+        #[arg(long)]
+        replace: bool,
         /// Exit with code 2 if a finding of this import has at least this severity
         /// (decided on the validated file, not on a later read of the database).
         #[arg(long, value_enum)]
@@ -797,8 +803,9 @@ fn main() -> ExitCode {
         Command::Import {
             format,
             input,
+            replace,
             fail_on,
-        } => commands::import::run(&ctx, format, &input, fail_on),
+        } => commands::import::run(&ctx, format, &input, replace, fail_on),
     };
     match result {
         Ok(code) => ExitCode::from(code),

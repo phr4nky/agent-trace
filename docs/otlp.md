@@ -10,7 +10,23 @@ agent-trace import --format otlp --input traces.otlp.jsonl --fail-on high
 ```
 
 Every OpenTelemetry trace in the file becomes one agent-trace trace (`otel/<service>/<root span>`).
-Importing the same file again skips traces already imported.
+
+A long agent run can end up in more than one file (the Collector's file exporter rotates its
+files, or you import while the agent is still running). Pass all of them in one call; spans are
+grouped by trace across the files, and a span that appears twice is mapped once:
+
+```sh
+agent-trace import --format otlp --input traces-1.otlp.jsonl --input traces-2.otlp.jsonl
+```
+
+Importing a trace that is already stored:
+
+- **Nothing new** (the same file again, or a part of it): skipped.
+- **All of its spans and more** (the file grew, or all parts come together now): replaced, and
+  the findings are recomputed from every span.
+- **Only other spans** (a later part on its own): not imported, exit code 1. A trace mapped
+  from part of its spans would miss the findings of the rest. Import all parts together with
+  `--replace`, which replaces the stored trace whatever it holds.
 
 ## Getting the file
 
