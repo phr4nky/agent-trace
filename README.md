@@ -338,7 +338,7 @@ recorded content are the same in every replay. Details and the suite format:
  agents (scripted or LLM) ──▶ recorder ──▶ redaction ──▶ live writer ──▶ storage (SQLite / PostgreSQL / MySQL)
      │  multiple agents,          (IDs, sequence, causal links)                 │
      │  delegation                                                              ▼
-     └─ MCP tools via stdio, policy gate                     rules AT-001…AT-007 ─▶ findings + evidence
+     └─ MCP tools via stdio, policy gate                     rules AT-001…AT-008 ─▶ findings + evidence
                                                                                 │
                                               CLI · live explorer · JSON/JSONL export · CI exit codes
 ```
@@ -386,6 +386,7 @@ agent-trace export <trace-id>|--latest --format json|jsonl [--output PATH] [--si
 agent-trace verify FILE [--public-key HEX|FILE]... [--require-signature]
 agent-trace keys generate|show [--key PATH]
 agent-trace canary new NAME [--kind aws|github|hex|password] | canary list
+agent-trace pins list | pins show NAME | pins reset NAME [--tool TOOL]...
 agent-trace graph <trace-id>|--latest [--output PATH]
 agent-trace replay trace <trace-id>|--latest|--input FILE --provider P [--model M] [--system-prompt FILE]
                          [--prompt TEXT] [--runs N] [--fail-on SEVERITY] [--report PATH]
@@ -706,6 +707,11 @@ Remote servers work too: `--url https://…` with the token taken from an enviro
 injection that arrives through one server and a privileged call to another server are linked,
 and the call is blocked.
 
+The proxy also **pins every tool definition** a server announces the first time. If a server
+later changes a tool's description or schema (a "rug pull", the delivery path of tool
+poisoning), AT-008 reports it, and in `enforce` mode the changed tool is hidden from the model
+and its calls are denied until you accept the change with `agent-trace pins reset`.
+
 The proxy sees tool traffic, not the model's context, so it links earlier untrusted content as
 *session context* and reports such findings with medium confidence. Setup for Claude Code,
 Cursor and Claude Desktop, the configuration file and the limits are in
@@ -759,6 +765,7 @@ Mapping, Collector setup and limits: [docs/otlp.md](docs/otlp.md).
 | `AT-005` | Untrusted content **impersonates system/developer authority** ("SYSTEM:", `<system>`, "ignore previous instructions", …) | `suspected` |
 | `AT-006` | Untrusted content seen by **one agent** reached a privileged action of **another agent** (cross-agent taint) | `attempted` / `blocked` / `executed` |
 | `AT-007` | A tool call carried a **canary token**, a decoy secret you planted: evidence of a leak attempt, not an indicator | `attempted` / `blocked` / `executed` |
+| `AT-008` | An MCP server **changed a tool's description or schema** after the proxy pinned it (rug pull, tool poisoning), or added a tool later | `suspected` / `attempted` / `blocked` / `executed` |
 
 **Canary tokens** turn a suspicion into evidence. Plant a decoy secret (a fake AWS key in
 `.env`, a token in a database row) and list it in `agent-trace.toml`, ideally through an

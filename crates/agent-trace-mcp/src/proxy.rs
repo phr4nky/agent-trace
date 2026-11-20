@@ -16,10 +16,20 @@
 //! medium confidence. Which content counts is set by [`ProxyConfig::taint_sources`].
 //! Tool descriptions from `tools/list` are scanned but never linked: they are in every
 //! session, so linking them would mark every privileged call.
+//!
+//! Tool pinning ([`crate::pins`]): with [`ProxyConfig::pins`] set, the proxy compares the
+//! server's tool definitions with their pins before the first call and on every complete
+//! `tools/list`. Changed tools are reported (AT-008); in enforce mode they are hidden from
+//! `tools/list` and their calls are denied.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use agent_trace_core::rules::{LINK_BASIS_KEY, LINK_BASIS_SESSION_CONTEXT, TAINT_SOURCE_KEY};
+use agent_trace_core::rules::{
+    LINK_BASIS_KEY, LINK_BASIS_SESSION_CONTEXT, TAINT_SOURCE_KEY, TOOL_PINS_ACTION_BLOCKED,
+    TOOL_PINS_ACTION_KEY, TOOL_PINS_ACTION_OBSERVED, TOOL_PINS_ADDED_KEY, TOOL_PINS_CHANGED,
+    TOOL_PINS_CHANGED_KEY, TOOL_PINS_KEY,
+};
 use agent_trace_core::{
     Decision, EventKind, EventSpec, Origin, PolicyOutcome, ToolPolicy, ToolState, TraceAccess,
     TraceRecorder, TraceStatus, TrustLevel, glob_match,
@@ -29,7 +39,7 @@ use rmcp::model::{
     GetPromptResponse, Implementation, ListPromptsResult, ListResourceTemplatesResult,
     ListResourcesResult, ListToolsResult, PaginatedRequestParams, PromptsCapability,
     ReadResourceRequestParams, ReadResourceResponse, ResourceContents, ResourcesCapability,
-    ServerCapabilities, ServerConfig,
+    ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::{NotificationContext, RequestContext};
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceError, ServiceExt};
@@ -39,6 +49,7 @@ use uuid::Uuid;
 
 use crate::adapter::{CallSpec, McpSession};
 use crate::lab::record_gate;
+use crate::pins::{self, PinStore};
 
 /// At most this many earlier lower-trust events are linked to one tool request (newest kept).
 pub const MAX_SESSION_CONTEXT: usize = 256;
@@ -75,6 +86,8 @@ pub struct ProxyConfig {
     pub taint_sources: Vec<String>,
     /// What the proxy connects to (server program or URL without credentials), for the trace.
     pub endpoint: Option<String>,
+    /// Where tool definitions are pinned; `None` turns pinning off.
+    pub pins: Option<PinStore>,
 }
 
 impl ProxyConfig {
@@ -85,6 +98,7 @@ impl ProxyConfig {
             policy: ToolPolicy::default(),
             taint_sources: vec!["*".into()],
             endpoint: None,
+            pins: None,
         }
     }
 
@@ -152,6 +166,24 @@ struct Inner {
     /// This connection's `mcp-server-connected` event, parent of its events.
     /// `None` after [`Proxy::finish`].
     connection: Mutex<Option<Uuid>>,
+    pins: Mutex<PinState>,
+}
+
+/// What this connection knows about the server's tools and their pins.
+#[derive(Default)]
+struct PinState {
+    /// The tools were compared with their pins at least once.
+    checked: bool,
+    /// Tools whose definitions differ from their pins, with the reason a call is denied.
+    changed: HashMap<String, String>,
+    /// The changed tools last recorded, so an unchanged situation is recorded once.
+    reported: Vec<String>,
+}
+
+fn now_rfc3339() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
 }
 
 /// The proxy: an MCP server handler that forwards to `upstream` and records into `trace`.
@@ -253,6 +285,7 @@ impl Proxy {
                 config,
                 trace,
                 connection: Mutex::new(connection),
+                pins: Mutex::new(PinState::default()),
             }),
         })
     }
@@ -394,6 +427,157 @@ impl Proxy {
         }
     }
 
+    fn pin_state(&self) -> std::sync::MutexGuard<'_, PinState> {
+        self.inner
+            .pins
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Compare the server's tools with their pins once per connection, before the first call.
+    async fn ensure_pins_checked(&self) {
+        if self.inner.config.pins.is_some() && !self.pin_state().checked {
+            self.check_pins(None).await;
+        }
+    }
+
+    /// Compare the server's complete tool list (`full_list`, or fetched now) with its pins:
+    /// pin what is new, remember what changed, and record both. Errors are logged; a
+    /// changed tool stays changed until the next complete list says otherwise.
+    async fn check_pins(&self, full_list: Option<&[Tool]>) {
+        let config = &self.inner.config;
+        let upstream = &self.inner.upstream;
+        let Some(store) = &config.pins else {
+            return;
+        };
+        let fetched;
+        let tools: &[Tool] = match full_list {
+            Some(tools) => tools,
+            None => match upstream.peer().list_all_tools().await {
+                Ok(tools) => {
+                    fetched = tools;
+                    &fetched
+                }
+                Err(e) => {
+                    tracing::warn!("agent-trace could not list the tools to check their pins: {e}");
+                    return;
+                }
+            },
+        };
+        let pinned = match store.load(&config.name) {
+            Ok(p) => p,
+            Err(e) => {
+                // Never overwrite a pin file that cannot be read: it may hold the evidence.
+                tracing::warn!("agent-trace could not read the tool pins: {e:#}");
+                return;
+            }
+        };
+        let (check, file) = pins::check(
+            &config.name,
+            pinned.as_ref(),
+            tools,
+            Some(upstream.server_version.as_str()),
+            &now_rfc3339(),
+        );
+        if (check.first_use || !check.added.is_empty())
+            && let Err(e) = store.save(&file)
+        {
+            tracing::warn!("agent-trace could not save the tool pins: {e:#}");
+        }
+        let changed: Vec<String> = check.changed.iter().map(|c| c.tool.clone()).collect();
+        let report_change = {
+            let mut state = self.pin_state();
+            state.checked = true;
+            state.changed = check
+                .changed
+                .iter()
+                .map(|c| {
+                    let version = c
+                        .pinned
+                        .server_version
+                        .as_deref()
+                        .map(|v| format!(" (server version {v})"))
+                        .unwrap_or_default();
+                    (
+                        c.tool.clone(),
+                        format!(
+                            "the definition of tool {:?} changed since it was pinned on {}{version}; \
+                             review the change and accept it with `agent-trace pins reset {} --tool {}`",
+                            c.tool, c.pinned.pinned_at, config.name, c.tool
+                        ),
+                    )
+                })
+                .collect();
+            let new_situation = state.reported != changed;
+            state.reported = changed.clone();
+            !check.added.is_empty() || (!changed.is_empty() && new_situation)
+        };
+        let added: Vec<String> = check.added.iter().map(|(t, _)| t.clone()).collect();
+        let action = if config.mode == ProxyMode::Enforce {
+            TOOL_PINS_ACTION_BLOCKED
+        } else {
+            TOOL_PINS_ACTION_OBSERVED
+        };
+        let recorded = self.with(|rec, connection| {
+            if check.first_use {
+                rec.record(
+                    EventSpec::new(
+                        EventKind::AgentDecision,
+                        Origin::Policy,
+                        TrustLevel::Trusted,
+                        "mcp-tools-pinned",
+                    )
+                    .payload(json!({
+                        "proxy": config.name,
+                        "upstream": upstream.server_name,
+                        "upstream_version": upstream.server_version,
+                        "tools": file.tools.keys().collect::<Vec<_>>(),
+                        "pin_file": store.path(&config.name).display().to_string(),
+                    }))
+                    .parent(connection)
+                    .meta("proxy", config.name.clone()),
+                );
+            }
+            if report_change {
+                let mut payload = pins::change_payload(&check);
+                payload.insert("proxy".into(), config.name.clone().into());
+                payload.insert("upstream".into(), upstream.server_name.clone().into());
+                payload.insert(
+                    "upstream_version".into(),
+                    upstream.server_version.clone().into(),
+                );
+                payload.insert("mode".into(), config.mode.as_str().into());
+                if !changed.is_empty() {
+                    payload.insert("action".into(), action.into());
+                }
+                let mut spec = EventSpec::new(
+                    EventKind::AgentDecision,
+                    Origin::Policy,
+                    TrustLevel::Trusted,
+                    "mcp-tool-definitions-changed",
+                )
+                .payload(Value::Object(payload))
+                .parent(connection)
+                .meta("proxy", config.name.clone())
+                .meta(TOOL_PINS_KEY, TOOL_PINS_CHANGED)
+                .meta(TOOL_PINS_CHANGED_KEY, json!(changed))
+                .meta(TOOL_PINS_ADDED_KEY, json!(added));
+                if !changed.is_empty() {
+                    spec = spec.meta(TOOL_PINS_ACTION_KEY, action);
+                }
+                rec.record(spec);
+            }
+        });
+        if let Err(RecordError::Access(e)) = recorded {
+            tracing::warn!("agent-trace could not record the tool pin check: {e}");
+        }
+    }
+
+    /// Why a call of `tool` is denied by its pin, if it is.
+    fn pin_denial(&self, tool: &str) -> Option<String> {
+        self.pin_state().changed.get(tool).cloned()
+    }
+
     async fn proxied_call(
         &self,
         request: CallToolRequestParams,
@@ -402,11 +586,19 @@ impl Proxy {
         let config = &self.inner.config;
         let tool = request.name.to_string();
         let arguments = request.arguments.clone().unwrap_or_default();
+        self.ensure_pins_checked().await;
+        let pin_denial = self.pin_denial(&tool);
 
         // Request, decision and (if allowed) execution, in one access to the trace.
         let gate = self.with(|rec, connection| {
             let tainted = tainted(rec);
-            let verdict = config.evaluate(&tool, &arguments, &tainted);
+            let verdict = match pin_denial {
+                Some(reason) => PolicyOutcome {
+                    decision: Decision::Deny,
+                    reason,
+                },
+                None => config.evaluate(&tool, &arguments, &tainted),
+            };
             let (effective, extra) = apply_mode(config.mode, verdict);
             let start = tainted.len().saturating_sub(MAX_SESSION_CONTEXT);
             let context: Vec<Uuid> = tainted[start..].iter().map(|(id, _)| *id).collect();
@@ -548,13 +740,19 @@ impl ServerHandler for Proxy {
         request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let result = self
+        let first_page = request.as_ref().is_none_or(|r| r.cursor.is_none());
+        let mut result = self
             .inner
             .upstream
             .peer()
             .list_tools(request)
             .await
             .map_err(upstream_error)?;
+        if first_page && result.next_cursor.is_none() {
+            self.check_pins(Some(&result.tools)).await;
+        } else {
+            self.ensure_pins_checked().await;
+        }
         let tools: Vec<Value> = result
             .tools
             .iter()
@@ -572,6 +770,13 @@ impl ServerHandler for Proxy {
             json!({"method": "tools/list", "tools": tools}),
             false,
         );
+        if self.inner.config.mode == ProxyMode::Enforce {
+            // A changed definition never reaches the model in enforce mode.
+            let state = self.pin_state();
+            result
+                .tools
+                .retain(|t| !state.changed.contains_key(t.name.as_ref()));
+        }
         Ok(result)
     }
 

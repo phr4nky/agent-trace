@@ -179,6 +179,11 @@ pub fn run(ctx: &Context, args: ProxyArgs) -> anyhow::Result<u8> {
             .clone()
             .unwrap_or_else(|| vec!["*".into()]),
         endpoint: Some(endpoint),
+        pins: if section.pin_tools.unwrap_or(true) {
+            Some(super::pins::store(ctx)?)
+        } else {
+            None
+        },
     };
     let timeout = args
         .call_timeout_secs

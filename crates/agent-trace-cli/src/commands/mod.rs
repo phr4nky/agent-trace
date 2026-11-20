@@ -6,6 +6,7 @@ pub mod graph;
 pub mod hook;
 pub mod import;
 pub mod keys;
+pub mod pins;
 pub mod proxy;
 pub mod prune;
 pub mod replay;

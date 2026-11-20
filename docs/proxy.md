@@ -172,10 +172,53 @@ allow_destinations = ["hooks.corp.example", "*.corp.example"]  # `*.x` = subdoma
 mode = "observe"          # or "enforce"; --mode overrides it
 taint_sources = ["*"]
 call_timeout_secs = 300   # --call-timeout overrides it
+pin_tools = true          # pin tool definitions per server (default); see below
 ```
 
 `analyze`, `import`, `export`, `explore` and `demo run` use the same `[policy]`, so a CI gate
 judges a recorded trace the way the proxy did.
+
+## Tool pinning: rug pulls and tool poisoning
+
+Tool poisoning hides instructions in a tool's description or schema, and a "rug pull" changes
+a tool after you approved it ([Invariant Labs, April 2025][poisoning]; tool poisoning is MCP03
+in OWASP's MCP Top 10). Both reach the model through `tools/list`, before any tool is called.
+The proxy pins what a server announces and notices when it changes:
+
+- **First use.** The first time a server (by `--name`) answers `tools/list`, the proxy stores a
+  fingerprint of every tool in `<data dir>/pins/<name>.json` (trust on first use) and records
+  `mcp-tools-pinned`. The fingerprint is a SHA-256 over the canonical JSON of the name, title,
+  description, input and output schema and annotations, so reordered keys do not count as a
+  change and every changed word does.
+- **Every complete `tools/list`, and before the first call of a connection,** the tools are
+  compared with their pins:
+  - A tool whose definition differs from its pin is **never re-pinned automatically**. The
+    proxy records `mcp-tool-definitions-changed` with the pinned and the current description and
+    both hashes, and AT-008 reports it (high). In `enforce` mode the tool is removed from
+    `tools/list`, so the changed description never reaches the model, and its calls are
+    denied (`BLOCKED by agent-trace proxy policy: the definition of tool … changed since it was
+    pinned`). In `observe` mode it is forwarded and the denial recorded as `would_deny`.
+  - A tool that was not there before is pinned when first seen and reported as new (AT-008,
+    low): a tool added later can shadow or poison others.
+  - A tool that disappears keeps its pin, so it cannot return changed unnoticed.
+- **Accepting a change** after you reviewed it (for example a server update):
+
+  ```sh
+  agent-trace pins list                              # pinned servers
+  agent-trace pins show github                       # tools, hash prefixes, pinned descriptions
+  agent-trace pins reset github --tool get_issue     # pin the current definition next time
+  agent-trace pins reset github                      # forget all pins of the server
+  ```
+
+  After a reset, the next `tools/list` pins what the server announces then (reported once as a
+  new tool), so review the change in the trace first.
+
+Pins are per proxy name: use the same `--name` for the same server across sessions, and
+different names for different servers. Proxies running at the same time with the same name may
+both add pins; the last write wins, and a definition that differs is never overwritten. Turn
+pinning off with `pin_tools = false` in `[proxy]`.
+
+[poisoning]: https://invariantlabs.ai/blog/mcp-security-notification
 
 ## Remote servers (streamable HTTP)
 
@@ -264,6 +307,9 @@ agent-trace [--config PATH] [--data-dir PATH] [--database-url URL] proxy
   clean exit or a signal.
 - **The client's built-in tools are invisible.** Claude Code's Bash, Write or WebFetch never
   pass through an MCP server. Use the [Claude Code hooks](claude-code-hooks.md) for those.
+- **Tool pins cover tools only.** Resource and prompt definitions are not pinned. Servers that
+  answer `tools/list` in pages are compared once per connection with the complete list fetched
+  by the proxy.
 - **Forwarded, not recorded:** `resources/list`, `resources/templates/list`, `prompts/list`.
 - **Not forwarded:** resource subscriptions, list-changed notifications, logging, completions,
   and requests from the server to the client (sampling, elicitation, roots). The proxy announces

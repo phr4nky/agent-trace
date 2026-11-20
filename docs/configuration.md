@@ -17,6 +17,7 @@ allow_destinations = ["hooks.corp.example", "*.corp.example"]
 mode = "observe"                  # or "enforce"
 taint_sources = ["*"]
 call_timeout_secs = 300
+pin_tools = true                  # pin MCP tool definitions per server (see docs/proxy.md)
 
 [hooks]                           # agent-trace hook (see docs/claude-code-hooks.md)
 mode = "observe"

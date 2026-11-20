@@ -151,6 +151,11 @@ enum Command {
         #[command(subcommand)]
         command: CanaryCommand,
     },
+    /// Tool definitions the MCP proxy pinned per server (rug-pull protection, AT-008).
+    Pins {
+        #[command(subcommand)]
+        command: PinsCommand,
+    },
     /// Manage the key that signs exports.
     Keys {
         #[command(subcommand)]
@@ -401,6 +406,22 @@ enum CanaryCommand {
     },
     /// List the configured canaries (names only).
     List,
+}
+
+#[derive(Debug, Subcommand)]
+enum PinsCommand {
+    /// List the pinned servers.
+    List,
+    /// Show the pinned tools of a server (the proxy's --name).
+    Show { server: String },
+    /// Forget pins so the next tools/list pins the current definitions (accept a reviewed
+    /// change). Without --tool, all pins of the server.
+    Reset {
+        server: String,
+        /// Only this tool; repeatable.
+        #[arg(long = "tool", value_name = "TOOL")]
+        tools: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -667,6 +688,15 @@ fn main() -> ExitCode {
         Command::Canary {
             command: CanaryCommand::List,
         } => commands::canary::list(&ctx),
+        Command::Pins {
+            command: PinsCommand::List,
+        } => commands::pins::list(&ctx),
+        Command::Pins {
+            command: PinsCommand::Show { server },
+        } => commands::pins::show(&ctx, &server),
+        Command::Pins {
+            command: PinsCommand::Reset { server, tools },
+        } => commands::pins::reset(&ctx, &server, &tools),
         Command::Keys {
             command: KeysCommand::Generate { key },
         } => commands::keys::generate(&ctx, key.as_deref()),

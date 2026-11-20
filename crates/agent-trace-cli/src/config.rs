@@ -90,6 +90,8 @@ pub struct ProxySection {
     pub taint_sources: Option<Vec<String>>,
     /// Maximum seconds to wait for a `tools/call` response from the upstream server.
     pub call_timeout_secs: Option<u64>,
+    /// Pin tool definitions per server and report changes (default: true).
+    pub pin_tools: Option<bool>,
 }
 
 /// A loaded configuration and the file it came from (`None` = built-in defaults).

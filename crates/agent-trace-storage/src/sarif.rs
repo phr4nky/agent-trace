@@ -328,7 +328,7 @@ mod tests {
         );
         assert_eq!(log["version"], "2.1.0");
         let run = &log["runs"][0];
-        assert_eq!(run["tool"]["driver"]["rules"].as_array().unwrap().len(), 7);
+        assert_eq!(run["tool"]["driver"]["rules"].as_array().unwrap().len(), 8);
         let results = run["results"].as_array().unwrap();
         assert_eq!(results.len(), findings.len());
         let at002 = results.iter().find(|r| r["ruleId"] == "AT-002").unwrap();

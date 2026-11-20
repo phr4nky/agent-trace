@@ -10,6 +10,15 @@ The section of a version is used as the release notes of its GitHub release.
 
 ### Added
 
+- **Rug-pull protection for MCP servers** (`agent-trace pins list|show|reset`, `[proxy]
+  pin_tools`, on by default): the proxy pins every tool definition a server announces the first
+  time (SHA-256 over the canonical JSON of name, title, description, schemas and annotations)
+  in `<data dir>/pins/<name>.json`, and compares every complete `tools/list` and the tools before
+  the first call of a connection with the pins. New rule **AT-008** reports a changed definition
+  (high) or a tool added later (low); the change event keeps the pinned and current
+  descriptions and hashes. A changed tool is never re-pinned automatically: in enforce mode it
+  is hidden from `tools/list` and its calls are denied until `pins reset` accepts the reviewed
+  change.
 - **Canary tokens** (`[[canaries]]` in `agent-trace.toml`, `agent-trace canary new|list`): decoy
   secrets whose use in a tool call is evidence of a leak attempt. Values are matched on the
   original content (as written and percent-encoded) before redaction, stored traces keep only
