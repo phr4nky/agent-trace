@@ -8,6 +8,16 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Graph:** clicking an event opens an info card next to it: agent, origin, trust, tool state
+  and redactions at a glance, timing (since start, since the previous event and since its
+  cause), a payload summary, the findings it is evidence for, how many events lie up- and
+  downstream and which lower-trust events influenced it, with buttons to focus the chain, open
+  the full details and copy the payload. The side panel adds the lane, the payload size, the
+  upstream chain and the findings; findings show their remediation and evidence events.
+  Events that are evidence for a finding carry a severity dot, and ←/→ step through the events.
+
 ## [1.5.0] - 2026-11-17
 
 Findings in GitHub Code Scanning, exports that prove they are unchanged, control over what is

@@ -84,7 +84,9 @@ selected model and an optional system prompt. The CLI stores the replay, analyze
 `graph/graph.js`, and writes one HTML file. The viewer is plain JavaScript and SVG, no libraries:
 events are placed left to right by sequence, in one lane per agent and one per MCP server (for
 what the server returned); links are the recorded `caused_by_event_id`, `context_event_ids` and
-`parent_event_id`. Highlighting walks the same links the rules follow. The CSP hashes of the
+`parent_event_id`. Highlighting walks the same links the rules follow; the info card's provenance (upstream and
+downstream events, lower-trust influence) follows the cause (or parent) and context links, as the
+analyzer does. The CSP hashes of the
 inline script and style are computed when the page is written.
 
 ## Shared traces (proxy sessions, hooks)
