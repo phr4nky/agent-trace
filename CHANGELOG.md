@@ -115,6 +115,13 @@ The section of a version is used as the release notes of its GitHub release.
   (`hf_`), SendGrid (`SG.`), DigitalOcean (`dop_v1_`, `doo_`, `dor_`), Shopify (`shpat_` and
   others), Slack webhook URLs, temporary AWS access key IDs (`ASIA…`, next to `AKIA…`) and the
   key of Azure storage and Service Bus connection strings (`AccountKey=`, `SharedAccessKey=`).
+- `import --format otlp` silently skipped a trace that was already stored, also when the new
+  file held other spans of it (Collector file rotation, an import while the agent was still
+  running). The trace kept only the first part: findings from the rest were lost, and
+  `--fail-on` passed. Now a trace is skipped only when the import adds no span to it, replaced
+  when the import holds all of its spans and more, and otherwise refused with exit code 1.
+  `--input` can be repeated to import all parts of a trace together (spans are grouped by
+  trace across files, duplicates mapped once), and `--replace` replaces stored traces.
 
 ## [1.5.0] - 2026-11-17
 
