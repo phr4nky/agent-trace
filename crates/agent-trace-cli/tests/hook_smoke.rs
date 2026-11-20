@@ -202,6 +202,89 @@ fn errors_fail_open_unless_configured_to_fail_closed() {
     assert_eq!(out.status.code(), Some(1));
 }
 
+/// `on_error = "deny"` also holds when the configuration itself cannot be loaded, e.g. a
+/// canary whose environment variable is not set where Claude Code runs (an IDE, a new
+/// terminal). Exit 1 would let Claude Code run every tool call unchecked.
+#[test]
+fn configuration_errors_honor_on_error_deny() {
+    let data = tempfile::tempdir().unwrap();
+    let d = data.path();
+    let pre = json!({"session_id": "s", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+        "tool_input": {"command": "ls"}, "tool_use_id": "t"})
+    .to_string();
+    let prompt = json!({"session_id": "s", "hook_event_name": "UserPromptSubmit", "prompt": "hi"})
+        .to_string();
+    let write = |name: &str, text: &str| {
+        let path = d.join(name);
+        std::fs::write(&path, text).unwrap();
+        path.to_str().unwrap().to_owned()
+    };
+    let canary =
+        "[[canaries]]\nname = \"aws-decoy\"\nenv = \"AGENT_TRACE_TEST_HOOK_CANARY_UNSET\"\n";
+    let closed = write(
+        "closed.toml",
+        &format!("{canary}\n[hooks]\nmode = \"enforce\"\non_error = \"deny\"\n"),
+    );
+
+    // PreToolUse: denied with exit 2. The reason Claude sees does not name the canary.
+    let out = run(d, &["--config", &closed, "hook"], &pre);
+    assert_eq!(out.status.code(), Some(2), "fail closed");
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("could not load its configuration"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("aws-decoy") && !stderr.contains("CANARY_UNSET"),
+        "{stderr}"
+    );
+    // ...also with the mode from the command line.
+    let out = run(d, &["--config", &closed, "hook", "--mode", "ask"], &pre);
+    assert_eq!(out.status.code(), Some(2));
+    // Other events never block; observe mode and on_error = "allow" fail open (exit 1).
+    let out = run(d, &["--config", &closed, "hook"], &prompt);
+    assert_eq!(out.status.code(), Some(1));
+    let out = run(d, &["--config", &closed, "hook", "--mode", "observe"], &pre);
+    assert_eq!(out.status.code(), Some(1));
+    let open = write(
+        "open.toml",
+        &format!("{canary}\n[hooks]\nmode = \"enforce\"\n"),
+    );
+    let out = run(d, &["--config", &open, "hook"], &pre);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("CANARY_UNSET"),
+        "the user sees why"
+    );
+    // A file that is not TOML cannot say on_error: exit 1.
+    let broken = write(
+        "broken.toml",
+        "[hooks\nmode = \"enforce\"\non_error = \"deny\"\n",
+    );
+    let out = run(d, &["--config", &broken, "hook"], &pre);
+    assert_eq!(out.status.code(), Some(1));
+    // A typo in another table: the [hooks] table still decides.
+    let typo = write(
+        "typo.toml",
+        "[policy]\nprivilegd = [\"x\"]\n\n[hooks]\nmode = \"enforce\"\non_error = \"deny\"\n",
+    );
+    let out = run(d, &["--config", &typo, "hook"], &pre);
+    assert_eq!(out.status.code(), Some(2));
+
+    // An unknown profile (a typo in $AGENT_TRACE_PROFILE) is denied the same way.
+    let profiles = write(
+        "profiles.toml",
+        "[hooks]\nmode = \"enforce\"\non_error = \"deny\"\n\n[profiles.read-only]\ntools = [\"Read\"]\n",
+    );
+    let env = [("AGENT_TRACE_PROFILE", "read-onyl")];
+    let out = run_env(d, &["--config", &profiles, "hook"], &pre, &env);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("read-onyl"));
+    let out = run_env(d, &["--config", &profiles, "hook"], &prompt, &env);
+    assert_eq!(out.status.code(), Some(1));
+}
+
 #[test]
 fn print_settings_is_valid_settings_json() {
     let data = tempfile::tempdir().unwrap();

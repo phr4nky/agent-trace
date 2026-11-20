@@ -591,6 +591,19 @@ fn main() -> ExitCode {
         agent_trace_core::canary::configure(canaries).map_err(anyhow::Error::msg)
     });
     if let Err(e) = installed {
+        // A Claude Code hook decides itself: with `on_error = "deny"` a PreToolUse call it
+        // cannot check is denied, also when the configuration is what fails.
+        let e = match &cli.command {
+            Command::Hook {
+                mode,
+                print_settings: false,
+                ..
+            } => match commands::hook::config_failed(&ctx, mode.map(ProxyModeArg::into_mode), e) {
+                Ok(code) => return ExitCode::from(code),
+                Err(e) => e,
+            },
+            _ => e,
+        };
         eprintln!(
             "error: {}",
             output::term_safe(&agent_trace_core::Redactor::new().scrub(&format!("{e:#}")))

@@ -203,33 +203,50 @@ fn select_profile(
     }
 }
 
-/// Find and parse the configuration.
-pub fn load(explicit: Option<&Path>, data_dir: Option<&Path>) -> anyhow::Result<Loaded> {
+/// The configuration file to use: `explicit` (`--config`), else `$AGENT_TRACE_CONFIG`, else
+/// the first of `./agent-trace.toml` and `<data dir>/agent-trace.toml` that exists. A named
+/// file is returned even if it does not exist (reading it reports that).
+fn find(explicit: Option<&Path>, data_dir: Option<&Path>) -> Option<PathBuf> {
     let named = explicit.map(Path::to_path_buf).or_else(|| {
         std::env::var_os("AGENT_TRACE_CONFIG")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
     });
-    if let Some(path) = named {
-        return parse_file(&path).map(|config| Loaded {
-            config,
-            path: Some(path),
-        });
+    if named.is_some() {
+        return named;
     }
-    let implicit =
-        std::iter::once(PathBuf::from(FILE_NAME)).chain(data_dir.map(|d| d.join(FILE_NAME)));
-    for path in implicit {
-        if path.is_file() {
-            return parse_file(&path).map(|config| Loaded {
-                config,
-                path: Some(path),
-            });
-        }
-    }
-    Ok(Loaded::default())
+    std::iter::once(PathBuf::from(FILE_NAME))
+        .chain(data_dir.map(|d| d.join(FILE_NAME)))
+        .find(|path| path.is_file())
 }
 
-fn parse_file(path: &Path) -> anyhow::Result<Config> {
+/// Find and parse the configuration.
+pub fn load(explicit: Option<&Path>, data_dir: Option<&Path>) -> anyhow::Result<Loaded> {
+    match find(explicit, data_dir) {
+        Some(path) => parse_file(&path).map(|config| Loaded {
+            config,
+            path: Some(path),
+        }),
+        None => Ok(Loaded::default()),
+    }
+}
+
+/// The `[hooks]` table of the configuration file, read without checking the rest of the file,
+/// so `agent-trace hook` can honor `on_error` when the configuration as a whole cannot be
+/// loaded (a canary whose environment variable is not set, a typo in another table). `None`
+/// when there is no file, it cannot be read or is not TOML, or the `[hooks]` table itself is
+/// invalid.
+pub fn hooks_section(explicit: Option<&Path>, data_dir: Option<&Path>) -> Option<HooksSection> {
+    #[derive(Deserialize)]
+    struct HooksOnly {
+        #[serde(default)]
+        hooks: HooksSection,
+    }
+    let text = read_file(&find(explicit, data_dir)?).ok()?;
+    toml::from_str::<HooksOnly>(&text).ok().map(|c| c.hooks)
+}
+
+fn read_file(path: &Path) -> anyhow::Result<String> {
     let meta = std::fs::metadata(path)
         .with_context(|| format!("cannot read config file {}", path.display()))?;
     if !meta.is_file() {
@@ -241,8 +258,12 @@ fn parse_file(path: &Path) -> anyhow::Result<Config> {
             path.display()
         );
     }
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("cannot read config file {}", path.display()))?;
+    std::fs::read_to_string(path)
+        .with_context(|| format!("cannot read config file {}", path.display()))
+}
+
+fn parse_file(path: &Path) -> anyhow::Result<Config> {
+    let text = read_file(path)?;
     parse(&text).with_context(|| format!("invalid config file {}", path.display()))
 }
 

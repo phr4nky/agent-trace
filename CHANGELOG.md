@@ -122,6 +122,14 @@ The section of a version is used as the release notes of its GitHub release.
   when the import holds all of its spans and more, and otherwise refused with exit code 1.
   `--input` can be repeated to import all parts of a trace together (spans are grouped by
   trace across files, duplicates mapped once), and `--replace` replaces stored traces.
+- `agent-trace hook` ignored `on_error = "deny"` when the configuration could not be loaded:
+  a canary whose `env` variable is not set where Claude Code runs (an IDE, another terminal),
+  a typo in another table, or an unknown profile (`--profile`, `$AGENT_TRACE_PROFILE`). The
+  hook exited with 1, so Claude Code ran every tool call unchecked and unrecorded, although
+  enforce or ask mode with `on_error = "deny"` promises to deny calls that cannot be checked.
+  The `[hooks]` table is now read on its own in that case, and PreToolUse calls are denied
+  (exit 2). The reason Claude sees does not repeat a configuration error, which may name
+  canaries. A file that is not valid TOML still fails open, as it cannot say `on_error`.
 
 ## [1.5.0] - 2026-11-17
 

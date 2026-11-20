@@ -48,38 +48,37 @@ pub fn run(ctx: &Context, args: HookArgs) -> anyhow::Result<u8> {
     if args.print_settings {
         return print_settings(ctx, args.mode, args.profile.as_deref());
     }
-    let loaded = ctx.config()?;
-    let section = &loaded.config.hooks;
-    let mode = args.mode.or(section.mode).unwrap_or_default();
-    let settings = HookSettings {
-        mode,
-        profile: loaded.profile(args.profile.as_deref())?,
-        policy: loaded.policy(),
-        taint_sources: section.taint_sources.clone().unwrap_or_else(|| {
-            DEFAULT_HOOK_TAINT_SOURCES
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
-        }),
-    };
-    let mut raw = Vec::new();
-    std::io::stdin()
-        .take(MAX_INPUT_BYTES + 1)
-        .read_to_end(&mut raw)
-        .context("cannot read the hook event from stdin")?;
-    let input: Option<HookInput> = (raw.len() as u64 <= MAX_INPUT_BYTES)
-        .then(|| serde_json::from_slice(&raw).ok())
-        .flatten();
+    let input = read_input()?;
     let pre_tool_use = input
         .as_ref()
         .is_some_and(|i| i.hook_event_name == "PreToolUse");
-    let result = match &input {
-        Some(i) if !i.session_id.is_empty() => record(ctx, i, &settings, &loaded),
-        Some(_) => Err(anyhow::anyhow!("hook event without session_id")),
-        None => Err(anyhow::anyhow!(
-            "stdin is not a Claude Code hook event (JSON, at most {MAX_INPUT_BYTES} bytes)"
-        )),
+    let loaded = match ctx.config() {
+        Ok(loaded) => loaded,
+        Err(e) => return config_error(ctx, args.mode, pre_tool_use, e),
     };
+    let section = &loaded.config.hooks;
+    let mode = args.mode.or(section.mode).unwrap_or_default();
+    // An unknown profile is an error like any other: without the profile nothing is decided.
+    let result = loaded.profile(args.profile.as_deref()).and_then(|profile| {
+        let settings = HookSettings {
+            mode,
+            profile,
+            policy: loaded.policy(),
+            taint_sources: section.taint_sources.clone().unwrap_or_else(|| {
+                DEFAULT_HOOK_TAINT_SOURCES
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            }),
+        };
+        match &input {
+            Some(i) if !i.session_id.is_empty() => record(ctx, i, &settings, &loaded),
+            Some(_) => Err(anyhow::anyhow!("hook event without session_id")),
+            None => Err(anyhow::anyhow!(
+                "stdin is not a Claude Code hook event (JSON, at most {MAX_INPUT_BYTES} bytes)"
+            )),
+        }
+    });
     match result {
         Ok(HookOutput {
             decision: Some((decision, reason)),
@@ -105,6 +104,61 @@ pub fn run(ctx: &Context, args: HookArgs) -> anyhow::Result<u8> {
         // Any other non-zero exit lets Claude Code continue (fail open) and shows the error.
         Err(e) => Err(e),
     }
+}
+
+/// The hook event on stdin: `None` if it is not a Claude Code hook event (not JSON, or larger
+/// than [`MAX_INPUT_BYTES`]).
+fn read_input() -> anyhow::Result<Option<HookInput>> {
+    let mut raw = Vec::new();
+    std::io::stdin()
+        .take(MAX_INPUT_BYTES + 1)
+        .read_to_end(&mut raw)
+        .context("cannot read the hook event from stdin")?;
+    Ok((raw.len() as u64 <= MAX_INPUT_BYTES)
+        .then(|| serde_json::from_slice(&raw).ok())
+        .flatten())
+}
+
+/// The configuration could not be loaded (`main` checks it before any command runs), so
+/// nothing can be recorded or decided. Handled like any other recording error.
+pub fn config_failed(
+    ctx: &Context,
+    mode: Option<ProxyMode>,
+    error: anyhow::Error,
+) -> anyhow::Result<u8> {
+    let pre_tool_use = read_input()
+        .ok()
+        .flatten()
+        .is_some_and(|i| i.hook_event_name == "PreToolUse");
+    config_error(ctx, mode, pre_tool_use, error)
+}
+
+/// A PreToolUse call is denied (exit 2) when the `[hooks]` table, read on its own, asks for it
+/// (`on_error = "deny"` in enforce or ask mode); otherwise the error is returned (exit 1, Claude
+/// Code continues). A file that is not TOML cannot say `on_error`, so it fails open.
+///
+/// The reason Claude sees does not repeat the error: it may name canary tokens and the
+/// variables that hold them, which the agent must not learn.
+fn config_error(
+    ctx: &Context,
+    mode: Option<ProxyMode>,
+    pre_tool_use: bool,
+    error: anyhow::Error,
+) -> anyhow::Result<u8> {
+    let data_dir = ctx.data_dir().ok();
+    let fail_closed = pre_tool_use
+        && crate::config::hooks_section(ctx.config.as_deref(), data_dir.as_deref()).is_some_and(
+            |s| mode.or(s.mode).unwrap_or_default().gates() && s.on_error == OnError::Deny,
+        );
+    if !fail_closed {
+        return Err(error);
+    }
+    eprintln!(
+        "agent-trace could not load its configuration, denied (on_error = \"deny\"). The \
+         error is not shown to the agent; run `agent-trace trace list` with the hook's options \
+         in a terminal to see it."
+    );
+    Ok(EXIT_BLOCK)
 }
 
 fn record(
