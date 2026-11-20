@@ -149,6 +149,36 @@ enum Command {
         #[arg(long)]
         require_signature: bool,
     },
+    /// Evidence report for record-keeping (e.g. EU AI Act Art. 12 / 26(6)): what was
+    /// recorded, by which configuration, how long it is kept, and whether exported files are
+    /// unchanged. Not a compliance statement. Exit 1 if an input fails verification.
+    Evidence {
+        /// Signed JSONL exports, verified like `agent-trace verify`.
+        #[arg(value_name = "FILE")]
+        files: Vec<PathBuf>,
+        /// Also include this stored trace (id or unique prefix). Repeatable. Stored traces
+        /// are not tamper-evident.
+        #[arg(long = "trace", value_name = "ID")]
+        trace_ids: Vec<String>,
+        /// Also include stored traces created at or after this time (YYYY-MM-DD or RFC 3339).
+        #[arg(long, value_name = "DATE")]
+        since: Option<String>,
+        /// Also include every stored trace.
+        #[arg(long)]
+        all: bool,
+        /// A trusted signer: hex public key or a .pub file. Repeatable. Your own signing key
+        /// is always trusted.
+        #[arg(long, value_name = "KEY")]
+        public_key: Vec<String>,
+        /// Count unsigned files as failed.
+        #[arg(long)]
+        require_signature: bool,
+        #[arg(long, value_enum, default_value = "markdown")]
+        format: EvidenceFormat,
+        /// Output file, created private to you (default: stdout).
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
     /// Canary tokens: decoy secrets whose use in a tool call is reported (AT-007) and, in
     /// enforce mode, denied. Configure them with [[canaries]] in agent-trace.toml.
     Canary {
@@ -513,6 +543,12 @@ pub enum ExportFormat {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum EvidenceFormat {
+    Markdown,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ImportFormat {
     Jsonl,
     /// OpenTelemetry traces as OTLP/JSON (GenAI semantic conventions), one request per file
@@ -712,6 +748,31 @@ fn main() -> ExitCode {
             public_key,
             require_signature,
         } => commands::keys::verify(&ctx, &file, &public_key, require_signature),
+        Command::Evidence {
+            files,
+            trace_ids,
+            since,
+            all,
+            public_key,
+            require_signature,
+            format,
+            output,
+        } => commands::evidence::run(
+            &ctx,
+            &commands::evidence::Args {
+                files: &files,
+                trace_ids: &trace_ids,
+                since: since.as_deref(),
+                all,
+                public_keys: &public_key,
+                require_signature,
+                format: match format {
+                    EvidenceFormat::Markdown => commands::evidence::Format::Markdown,
+                    EvidenceFormat::Json => commands::evidence::Format::Json,
+                },
+                output: output.as_deref(),
+            },
+        ),
         Command::Canary {
             command: CanaryCommand::New { name, kind },
         } => commands::canary::new(&name, kind),

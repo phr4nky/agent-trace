@@ -74,6 +74,24 @@ fn trusted_key(spec: &str) -> anyhow::Result<String> {
     parse_public_key(&text).with_context(|| format!("{spec} contains no Ed25519 public key"))
 }
 
+/// The trusted signers as `(public key hex, where the trust comes from)`: every
+/// `--public-key`, and the local signing key if there is one.
+pub fn trusted_keys(
+    ctx: &Context,
+    public_keys: &[String],
+) -> anyhow::Result<Vec<(String, String)>> {
+    let mut trusted: Vec<(String, String)> = Vec::new();
+    for spec in public_keys {
+        trusted.push((trusted_key(spec)?, format!("--public-key {spec}")));
+    }
+    if let Ok(path) = key_path(ctx, None)
+        && let Ok(key) = SigningKey::load(&path)
+    {
+        trusted.push((key.public_key(), "your signing key".into()));
+    }
+    Ok(trusted)
+}
+
 pub fn verify(
     ctx: &Context,
     file: &Path,
@@ -81,16 +99,7 @@ pub fn verify(
     require_signature: bool,
 ) -> anyhow::Result<u8> {
     let s = &ctx.style;
-    let mut trusted: Vec<(String, String)> = Vec::new();
-    for spec in public_keys {
-        trusted.push((trusted_key(spec)?, format!("--public-key {spec}")));
-    }
-    // The local signing key, if there is one, is trusted too.
-    if let Ok(path) = key_path(ctx, None)
-        && let Ok(key) = SigningKey::load(&path)
-    {
-        trusted.push((key.public_key(), "your signing key".into()));
-    }
+    let trusted = trusted_keys(ctx, public_keys)?;
     let input = File::open(file).with_context(|| format!("cannot open {}", file.display()))?;
     let imported =
         read_jsonl(input).with_context(|| format!("{} failed verification", file.display()))?;

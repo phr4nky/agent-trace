@@ -255,6 +255,22 @@ curl -sS "https://splunk.example.com:8088/services/collector/event" \
 
 Mapping, Elastic example and limits: [docs/siem.md](docs/siem.md).
 
+### 6. Evidence report for record-keeping
+
+```bash
+agent-trace evidence trace.jsonl --output evidence-report.md   # signed exports, verified
+agent-trace evidence --since 2026-05-01 --format json           # stored traces (not tamper-evident)
+```
+
+`evidence` summarizes what was recorded (per trace: time span, events, agents, MCP servers,
+tools, findings by severity and rule, redaction counts), by which configuration (a SHA-256 of
+the canonical configuration plus a summary without secrets), how long traces are kept
+(`[retention]`, oldest and newest stored trace) and whether each export is unchanged and signed
+by a trusted key. It is meant as material for record-keeping duties such as Articles 12 and
+26(6) of the EU AI Act. **It is not a compliance statement**, says so at the top, and lists
+what it does not prove. A file that fails verification is marked `FAILED` and the command exits
+with 1. Payloads are never included. Details: [docs/compliance-evidence.md](docs/compliance-evidence.md).
+
 ---
 
 ## Watching live
@@ -411,6 +427,8 @@ agent-trace sarif FILE... [--output PATH] [--fail-on low|medium|high|critical]
 agent-trace export <trace-id>|--latest --format json|jsonl [--output PATH] [--sign [--key PATH]]
 agent-trace verify FILE [--public-key HEX|FILE]... [--require-signature]
 agent-trace keys generate|show [--key PATH]
+agent-trace evidence [FILE...] [--trace ID]... [--since DATE] [--all] [--public-key HEX|FILE]...
+                     [--require-signature] [--format markdown|json] [--output PATH]
 agent-trace canary new NAME [--kind aws|github|hex|password] | canary list
 agent-trace pins list | pins show NAME | pins reset NAME [--tool TOOL]...
 agent-trace graph <trace-id>|--latest [--output PATH]
@@ -442,7 +460,7 @@ agent-trace --help
 | Code | Meaning |
 |---|---|
 | `0` | Success, and no finding at or above `--fail-on` (or no `--fail-on` given) |
-| `1` | Error: bad input, invalid trace, database unavailable, provider error, … |
+| `1` | Error: bad input, invalid trace, database unavailable, provider error, … (`verify` and `evidence`: a file failed verification) |
 | `2` | Findings at or above the `--fail-on` severity |
 
 ---

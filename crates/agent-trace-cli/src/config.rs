@@ -13,14 +13,14 @@ use agent_trace_core::rules::{CustomRule, CustomRuleConfig};
 use agent_trace_core::{Analyzer, PolicyConfig, ProfileConfig, ToolPolicy, ToolProfile};
 use agent_trace_mcp::ProxyMode;
 use anyhow::{Context as _, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// File name looked up in the working directory and the data directory.
 pub const FILE_NAME: &str = "agent-trace.toml";
 /// Larger files are rejected (a config file is a few lines).
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
@@ -51,7 +51,7 @@ pub struct Config {
 pub const PROFILE_ENV: &str = "AGENT_TRACE_PROFILE";
 
 /// The `[retention]` table.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RetentionSection {
     /// Delete traces older than this many days.
@@ -61,7 +61,7 @@ pub struct RetentionSection {
 }
 
 /// What `agent-trace hook` does when it cannot record or decide (e.g. the database is down).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnError {
     /// Let the tool call proceed (fail open). The error is printed on stderr.
@@ -72,7 +72,7 @@ pub enum OnError {
 }
 
 /// The `[hooks]` table (Claude Code hooks, `agent-trace hook`).
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HooksSection {
     /// `observe` (default), `enforce` or `ask`.
@@ -89,7 +89,7 @@ pub struct HooksSection {
 pub const DEFAULT_HOOK_TAINT_SOURCES: &[&str] = &["WebFetch", "WebSearch", "mcp__*"];
 
 /// The `[proxy]` table.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxySection {
     /// `observe` (default), `enforce` or `ask`.
@@ -103,6 +103,35 @@ pub struct ProxySection {
     /// Ask mode: maximum seconds to wait for the user's answer (default 300); then the call
     /// is denied.
     pub ask_timeout_secs: Option<u64>,
+}
+
+impl Config {
+    /// The configuration in canonical form, for [`Self::sha256`]: every option (unset ones as
+    /// `null`), object keys sorted, list order kept (it can matter, e.g. for rules). Canary
+    /// values are left out: a hash of a short decoy value could be brute-forced.
+    pub fn canonical_json(&self) -> anyhow::Result<String> {
+        let mut value = serde_json::to_value(self)?;
+        if let Some(canaries) = value
+            .get_mut("canaries")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for canary in canaries {
+                if let Some(c) = canary.as_object_mut() {
+                    c.remove("value");
+                }
+            }
+        }
+        // `serde_json::Map` is ordered by key (no `preserve_order`), so this is canonical.
+        Ok(serde_json::to_string(&value)?)
+    }
+
+    /// SHA-256 (hex) of [`Self::canonical_json`]: the same settings give the same hash,
+    /// whatever their order or formatting in the file.
+    pub fn sha256(&self) -> anyhow::Result<String> {
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(self.canonical_json()?.as_bytes());
+        Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
+    }
 }
 
 /// A loaded configuration and the file it came from (`None` = built-in defaults).
@@ -361,6 +390,49 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn config_hash_ignores_order_and_formatting() {
+        let a = parse(
+            r#"
+            [retention]
+            max_age_days = 200
+            max_traces = 50
+
+            [policy]
+            privileged = ["push_files"]
+            allow_destinations = ["*.corp.example"]
+
+            [[canaries]]
+            name = "aws-decoy"
+            value = "AKIAZ7Q3CANARY4X2LMN"
+            "#,
+        )
+        .unwrap();
+        let b = parse(
+            r#"
+            [[canaries]]
+            value = "AKIAZ7Q3CANARY4X2LMN"
+            name  = "aws-decoy"
+            [policy]
+            allow_destinations = [ "*.corp.example" ]
+            privileged = ["push_files"]
+            [retention]
+            max_traces = 50
+            max_age_days = 200
+            "#,
+        )
+        .unwrap();
+        assert_eq!(a.sha256().unwrap(), b.sha256().unwrap());
+        assert_eq!(a.sha256().unwrap().len(), 64);
+        let c = parse("[retention]\nmax_age_days = 30\nmax_traces = 50\n[policy]\nprivileged = [\"push_files\"]\nallow_destinations = [\"*.corp.example\"]\n[[canaries]]\nname = \"aws-decoy\"\nvalue = \"AKIAZ7Q3CANARY4X2LMN\"\n").unwrap();
+        assert_ne!(a.sha256().unwrap(), c.sha256().unwrap(), "values count");
+        assert_ne!(a.sha256().unwrap(), parse("").unwrap().sha256().unwrap());
+        // Canary values never reach the canonical form.
+        let canonical = a.canonical_json().unwrap();
+        assert!(!canonical.contains("AKIAZ7Q3CANARY4X2LMN"), "{canonical}");
+        assert!(canonical.contains("aws-decoy"));
     }
 
     #[test]
