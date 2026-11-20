@@ -288,6 +288,8 @@ impl TraceRecorder {
         } else {
             now_utc()
         };
+        // Canary values are matched on the original content; only their names are kept.
+        let canaries = crate::canary::names_for(&spec.metadata, &spec.payload);
         let (payload, report) = self.redactor.redact_value(&spec.payload);
         let (metadata_value, meta_report) =
             self.redactor.redact_value(&Value::Object(spec.metadata));
@@ -306,6 +308,7 @@ impl TraceRecorder {
             // The stored payload is cut; let the content rules see what the agent saw.
             crate::rules::record_content_indicators(&mut metadata, &spec.payload);
         }
+        crate::canary::store(&mut metadata, canaries);
         // Only keep links to events that exist in this trace (never invent causality).
         let known = |id: &Uuid| self.events.iter().any(|e| e.event_id == *id);
         let context_event_ids: Vec<Uuid> =

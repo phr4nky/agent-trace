@@ -1,6 +1,6 @@
 # Writing rules
 
-agent-trace ships six rules (AT-001 … AT-006). Add your own in two ways:
+agent-trace ships seven rules (AT-001 … AT-007; AT-007 reports [canary tokens](canaries.md)). Add your own in two ways:
 
 - **Declarative rules** in `agent-trace.toml`: no code, no rebuild. They run in every command
   that analyzes (`analyze`, `import`, `demo run`, the proxy, the hooks, `replay`, `graph`).

@@ -41,6 +41,10 @@ severity = "high"
 tools = ["Bash"]
 arguments = { command = 'curl[^|]*\|\s*sh' }
 after_untrusted = true
+
+[[canaries]]                      # decoy secrets (see docs/canaries.md)
+name = "aws-decoy"
+env = "AGENT_TRACE_CANARY_AWS_DECOY"     # or: value = "AKIA…"
 ```
 
 ## `[redaction]`
@@ -54,6 +58,17 @@ after_untrusted = true
   `import` (before anything is stored). Data recorded before a pattern was added keeps its old
   form; re-redacting stored traces is not done automatically.
 - Redacted values count as sensitive data for AT-003.
+
+## `[[canaries]]`
+
+- `name`: 1–64 lowercase letters, digits, `-`, `_` or `.`; shown in findings and stored in traces.
+- Exactly one of `value` (the decoy itself, 12–1024 characters without spaces) and `env` (the
+  name of an environment variable that holds it). An `env` variable that is not set is an error
+  for every command, so a canary is never silently inactive.
+- Keep this table where the agent cannot read it: the agent-trace.toml in the data directory,
+  `--config`, or `env`. `agent-trace canary new NAME` prints a fresh decoy and its entry.
+- Canary values are replaced with `[REDACTED:canary]` everywhere; tool calls that carry one are
+  reported as AT-007 and denied by the policy gate. Details: [canaries.md](canaries.md).
 
 ## `[retention]` and `agent-trace prune`
 

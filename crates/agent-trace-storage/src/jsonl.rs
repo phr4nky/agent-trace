@@ -8,6 +8,7 @@
 use crate::integrity::{Chain, IntegrityRecord, SigningKey, Verified};
 use std::io::{BufRead, Read, Write};
 
+use agent_trace_core::canary;
 use agent_trace_core::rules::record_content_indicators;
 use std::collections::HashMap;
 
@@ -337,6 +338,7 @@ fn redact_map(redactor: &Redactor, m: Map<String, Value>) -> (Map<String, Value>
 /// Redact one event like the recorder does: payload, metadata (both counted in
 /// `metadata.redactions`), name and agent id. Returns the number of new redactions.
 fn redact_event(redactor: &Redactor, mut e: Event) -> (Event, u64) {
+    let canaries = canary::names_for(&e.metadata, &e.payload);
     let (mut metadata, meta) = redact_map(redactor, std::mem::take(&mut e.metadata));
     let (payload, pay) = redactor.redact_value(&e.payload);
     let added = pay.redactions.saturating_add(meta.redactions);
@@ -354,6 +356,7 @@ fn redact_event(redactor: &Redactor, mut e: Event) -> (Event, u64) {
         // Rules only see the stored (cut) payload; keep what the original contained.
         record_content_indicators(&mut metadata, &e.payload);
     }
+    canary::store(&mut metadata, canaries);
     e.payload = payload;
     e.metadata = metadata;
     e.name = redactor.scrub(&e.name);

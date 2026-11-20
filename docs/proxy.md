@@ -127,7 +127,8 @@ A call is denied when:
 1. it is an outbound tool and a destination argument is not on the allowlist (same check as
    the lab and AT-003), or
 2. it is a privileged tool (outbound tools count as privileged) and lower-trust content from a
-   taint source was returned earlier in the session.
+   taint source was returned earlier in the session, or
+3. its arguments carry a [canary token](canaries.md), whatever the tool.
 
 ## Causality: session context, not causes
 

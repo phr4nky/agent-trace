@@ -17,7 +17,7 @@
          +-------v---------------------------------------v-------+
          |                agent-trace-core                       |
          | recorder (ids, sequence, redaction) · provenance      |
-         | validation · policy · rules AT-001…AT-006             |
+         | validation · policy · rules AT-001…AT-007             |
          +--------------------------+----------------------------+
                                     |
                          +----------v-----------+

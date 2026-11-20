@@ -322,6 +322,12 @@ impl Redactor {
     pub fn redact_str(&self, input: &str) -> (String, RedactionReport) {
         let mut report = RedactionReport::default();
         let mut text = input.to_owned();
+        // Canaries first, so a decoy that looks like a known secret format is still labelled
+        // as a canary (and never survives in part).
+        if let Some((replaced, n)) = crate::canary::redact(&text) {
+            text = replaced;
+            report.redactions += n;
+        }
         for pattern in patterns() {
             let placeholder = format!("{REDACTED_PREFIX}:{}]", pattern.label);
             let replaced = pattern.regex.replace_all(&text, |caps: &Captures<'_>| {

@@ -226,6 +226,9 @@ impl ToolPolicy {
 
     /// Evaluate a tool request. Outbound tools are denied unless the destination is allowlisted.
     pub fn evaluate(&self, tool: &str, arguments: &Map<String, Value>) -> PolicyOutcome {
+        if let Some(denied) = canary_denial(arguments) {
+            return denied;
+        }
         if self.is_outbound(tool) {
             if let Some(destination) = self.disallowed_destination(arguments) {
                 return PolicyOutcome {
@@ -270,6 +273,9 @@ impl ToolPolicy {
             decision: Decision::Deny,
             reason,
         };
+        if let Some(denied) = canary_denial(arguments) {
+            return denied;
+        }
         if self.is_outbound(tool)
             && let Some(destination) = self.disallowed_destination(arguments)
         {
@@ -303,6 +309,23 @@ impl ToolPolicy {
             },
         }
     }
+}
+
+/// A tool call whose arguments carry a canary token is denied, whatever the tool: no
+/// legitimate task uses a decoy secret, so the call can only be moving it somewhere.
+fn canary_denial(arguments: &Map<String, Value>) -> Option<PolicyOutcome> {
+    let names = crate::canary::find_in_arguments(arguments);
+    (!names.is_empty()).then(|| PolicyOutcome {
+        decision: Decision::Deny,
+        reason: format!(
+            "the arguments contain canary token {}: decoy secrets are never used by legitimate work",
+            names
+                .iter()
+                .map(|n| format!("{n:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    })
 }
 
 /// Schemes whose destinations are parsed as URLs (everything else is a host or mailbox).

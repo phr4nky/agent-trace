@@ -338,7 +338,7 @@ recorded content are the same in every replay. Details and the suite format:
  agents (scripted or LLM) ──▶ recorder ──▶ redaction ──▶ live writer ──▶ storage (SQLite / PostgreSQL / MySQL)
      │  multiple agents,          (IDs, sequence, causal links)                 │
      │  delegation                                                              ▼
-     └─ MCP tools via stdio, policy gate                     rules AT-001…AT-006 ─▶ findings + evidence
+     └─ MCP tools via stdio, policy gate                     rules AT-001…AT-007 ─▶ findings + evidence
                                                                                 │
                                               CLI · live explorer · JSON/JSONL export · CI exit codes
 ```
@@ -385,6 +385,7 @@ agent-trace sarif FILE... [--output PATH] [--fail-on low|medium|high|critical]
 agent-trace export <trace-id>|--latest --format json|jsonl [--output PATH] [--sign [--key PATH]]
 agent-trace verify FILE [--public-key HEX|FILE]... [--require-signature]
 agent-trace keys generate|show [--key PATH]
+agent-trace canary new NAME [--kind aws|github|hex|password] | canary list
 agent-trace graph <trace-id>|--latest [--output PATH]
 agent-trace replay trace <trace-id>|--latest|--input FILE --provider P [--model M] [--system-prompt FILE]
                          [--prompt TEXT] [--runs N] [--fail-on SEVERITY] [--report PATH]
@@ -757,6 +758,19 @@ Mapping, Collector setup and limits: [docs/otlp.md](docs/otlp.md).
 | `AT-004` | A tool call was **denied by policy** (reported as `executed` if an execution was still recorded) | `blocked` / `executed` |
 | `AT-005` | Untrusted content **impersonates system/developer authority** ("SYSTEM:", `<system>`, "ignore previous instructions", …) | `suspected` |
 | `AT-006` | Untrusted content seen by **one agent** reached a privileged action of **another agent** (cross-agent taint) | `attempted` / `blocked` / `executed` |
+| `AT-007` | A tool call carried a **canary token**, a decoy secret you planted: evidence of a leak attempt, not an indicator | `attempted` / `blocked` / `executed` |
+
+**Canary tokens** turn a suspicion into evidence. Plant a decoy secret (a fake AWS key in
+`.env`, a token in a database row) and list it in `agent-trace.toml`, ideally through an
+environment variable. Tool calls that carry it are reported as AT-007 and denied in enforce
+mode; stored traces keep only the canary's name:
+
+```sh
+agent-trace canary new aws-decoy        # prints a decoy value and its [[canaries]] entry
+agent-trace canary list                 # what is configured (names only)
+```
+
+See [docs/canaries.md](docs/canaries.md).
 
 Every finding includes the rule ID and version, severity, confidence, attempt status, evidence
 event IDs and a remediation hint. Analysis is deterministic and idempotent: the same trace and rule
