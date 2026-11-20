@@ -126,6 +126,10 @@ enum Command {
         /// (default: trace-<id>.jsonl, the layout `--format jsonl` writes).
         #[arg(long, value_name = "URI")]
         artifact_uri: Option<String>,
+        /// OCSF, Splunk HEC and Elastic only: export every recorded event as well, not only
+        /// the findings.
+        #[arg(long)]
+        include_events: bool,
         /// JSONL only: sign the export with your signing key (see `agent-trace keys`).
         #[arg(long)]
         sign: bool,
@@ -500,6 +504,12 @@ pub enum ExportFormat {
     Jsonl,
     /// SARIF 2.1.0 (GitHub Code Scanning)
     Sarif,
+    /// OCSF 1.9.0 events, one per line (findings; events with --include-events)
+    Ocsf,
+    /// Splunk HTTP Event Collector events, one per line (/services/collector/event)
+    SplunkHec,
+    /// Elasticsearch _bulk body with ECS fields (action and document lines)
+    Elastic,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -680,6 +690,7 @@ fn main() -> ExitCode {
             format,
             output,
             artifact_uri,
+            include_events,
             sign,
             key,
         } => commands::export::run(
@@ -688,6 +699,7 @@ fn main() -> ExitCode {
             format,
             output.as_deref(),
             artifact_uri.as_deref(),
+            include_events,
             sign.then_some(key.as_deref()),
         ),
         Command::Sarif {

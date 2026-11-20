@@ -219,6 +219,7 @@ cannot run in your browser. It contains the same redacted data as `export --form
 ```bash
 agent-trace export --latest --format json  --output report.json   # findings + events
 agent-trace export --latest --format jsonl --output trace.jsonl   # re-importable trace
+agent-trace export --latest --format ocsf --include-events > trace.ocsf.ndjson  # SIEM
 ```
 
 Exports are **always redacted**. In the exfil scenario the stored request body reads
@@ -239,6 +240,20 @@ An unsigned chain only shows that a file is consistent: whoever edits it can rec
 chain. A signature by a key you trust shows that the file is the one its holder exported.
 `verify` exits with 1 when the chain is broken, the signature is invalid, or the signer is not
 a trusted key. The database itself is not protected: export and sign evidence you want to keep.
+
+**SIEM.** `--format ocsf` writes findings as [OCSF](https://schema.ocsf.io/) 1.9.0 Detection
+Findings, one per line; `--include-events` adds every recorded event (tool calls and policy
+decisions as API Activity, the rest as Base Events). `--format splunk-hec` wraps each event for
+the Splunk HTTP Event Collector, and `--format elastic` writes an Elasticsearch `_bulk` body
+with ECS fields and the OCSF event under `ocsf`. agent-trace only writes files; you send them:
+
+```bash
+agent-trace export --latest --format splunk-hec --include-events --output hec.ndjson
+curl -sS "https://splunk.example.com:8088/services/collector/event" \
+  -H "Authorization: Splunk $SPLUNK_HEC_TOKEN" --data-binary @hec.ndjson
+```
+
+Mapping, Elastic example and limits: [docs/siem.md](docs/siem.md).
 
 ---
 
@@ -391,6 +406,7 @@ agent-trace trace show <trace-id>|--latest [--payload]
 agent-trace analyze <trace-id>|--latest [--fail-on low|medium|high|critical]
 agent-trace explore <trace-id>|--latest [--follow] [--snapshot [--keys KEYS] [--size COLSxROWS]]
 agent-trace export <trace-id>|--latest --format json|jsonl|sarif [--output PATH] [--artifact-uri URI]
+agent-trace export <trace-id>|--latest --format ocsf|splunk-hec|elastic [--include-events] [--output PATH]
 agent-trace sarif FILE... [--output PATH] [--fail-on low|medium|high|critical]
 agent-trace export <trace-id>|--latest --format json|jsonl [--output PATH] [--sign [--key PATH]]
 agent-trace verify FILE [--public-key HEX|FILE]... [--require-signature]

@@ -1138,3 +1138,70 @@ fn otlp_import_maps_genai_spans() {
     );
     assert_eq!(out.status.code(), Some(1));
 }
+
+#[test]
+fn siem_exports_are_ndjson() {
+    let data = tempfile::tempdir().unwrap();
+    ok(&bin(data.path(), &["demo", "run", "--scenario", "all"]));
+    let ids = trace_ids(data.path());
+    let id = &ids["exfil-attempt"];
+    let findings = export_json(data.path(), id)["findings"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert!(findings > 0);
+    let lines = |format: &str, events: bool| -> Vec<Value> {
+        let mut args = vec!["export", id.as_str(), "--format", format];
+        if events {
+            args.push("--include-events");
+        }
+        let out = ok(&bin(data.path(), &args));
+        assert!(out.ends_with('\n'), "{format}");
+        out.lines()
+            .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{format}: {e}: {l}")))
+            .collect()
+    };
+
+    let ocsf = lines("ocsf", false);
+    assert_eq!(ocsf.len(), findings);
+    assert!(
+        ocsf.iter()
+            .all(|v| v["class_uid"] == 2004 && v["type_uid"] == 200401)
+    );
+    let all = lines("ocsf", true);
+    assert!(all.len() > findings);
+    assert!(all.iter().any(|v| v["class_uid"] == 6003));
+    assert!(all.iter().all(|v| v["metadata"]["version"] == "1.9.0"));
+    // The scenario's fake secret stays redacted.
+    let text: String = all.iter().map(Value::to_string).collect();
+    assert!(text.contains("[REDACTED:test_secret]"));
+    assert!(
+        !text.contains("FAKE_SECRET_FOR_TESTING_ONLY"),
+        "fake secret leaked"
+    );
+
+    let hec = lines("splunk-hec", true);
+    assert_eq!(hec.len(), all.len());
+    assert!(
+        hec.iter()
+            .all(|l| l["sourcetype"] == "agent-trace:ocsf" && l["time"].is_f64())
+    );
+
+    let bulk = lines("elastic", true);
+    assert_eq!(bulk.len(), 2 * all.len());
+    assert!(bulk.chunks(2).all(|p| p[0]["create"]["_id"].is_string()
+        && p[1]["@timestamp"].is_string()
+        && p[1]["ocsf"]["class_uid"].is_u64()));
+    assert_eq!(
+        bulk.iter()
+            .filter(|d| d["event"]["kind"] == "alert")
+            .count(),
+        findings
+    );
+
+    let out = bin(
+        data.path(),
+        &["export", id, "--format", "json", "--include-events"],
+    );
+    assert_eq!(out.status.code(), Some(1));
+}
