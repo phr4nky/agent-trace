@@ -222,14 +222,52 @@ pub(crate) fn outcome_text(
                     e.metadata.get("mock_tool").and_then(|v| v.as_bool()) == Some(true)
                         || e.execution_mode == ExecutionMode::Simulated
                 });
-            if mock {
+            let mut text: String = if mock {
                 "An execution event was recorded; the executed tool is a MOCK (no real side effects).".into()
             } else {
                 "An execution event was recorded for the request; verify its result before assuming impact.".into()
+            };
+            if let Some(note) = approval_note(ctx, outcome_ids) {
+                text.push(' ');
+                text.push_str(note);
             }
+            text
         }
         _ => "No execution or policy decision was recorded; treat as attempted only.".into(),
     }
+}
+
+/// Payload key on a `tool_policy_decision` that resolves an `ask` decision: `accepted`,
+/// `declined`, `cancelled`, `timeout`, `unsupported` or `error` (MCP proxy, ask mode).
+pub const HUMAN_APPROVAL_KEY: &str = "human_approval";
+/// Payload key on a `tool_call_executed` that follows an `ask` decision (Claude Code hooks):
+/// the call ran after the hook asked Claude Code to confirm it with the user.
+pub const AFTER_ASK_KEY: &str = "after_ask";
+
+/// What the trace records about human approval of the executed call, if anything. Only
+/// recorded facts are used: an accepted elicitation, or an execution after an `ask` answer.
+fn approval_note(ctx: &RuleContext<'_>, executed_ids: &[Uuid]) -> Option<&'static str> {
+    let executed: Vec<&Event> = executed_ids
+        .iter()
+        .filter_map(|id| ctx.index.get(*id))
+        .collect();
+    let accepted = executed.iter().any(|e| {
+        e.caused_by_event_id
+            .and_then(|id| ctx.index.get(id))
+            .and_then(|d| d.payload.get(HUMAN_APPROVAL_KEY))
+            .and_then(|v| v.as_str())
+            == Some("accepted")
+    });
+    if accepted {
+        return Some("A human approved the call (MCP elicitation) before it ran.");
+    }
+    executed
+        .iter()
+        .any(|e| e.payload.get(AFTER_ASK_KEY).and_then(|v| v.as_bool()) == Some(true))
+        .then_some(
+            "The call ran after the hook answered \"ask\" (Claude Code asks the user to \
+             confirm such a call).",
+        )
 }
 
 pub(crate) fn tool_name(event: &Event) -> &str {

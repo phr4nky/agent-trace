@@ -555,10 +555,9 @@ pub async fn gated_tool_call(
         spec = simulated(spec);
     }
     let outcome = match &gate.offered_tools {
-        Some(offered) if !offered.iter().any(|t| t == tool) => PolicyOutcome {
-            decision: Decision::Deny,
-            reason: format!("tool {tool:?} was not offered to this agent"),
-        },
+        Some(offered) if !offered.iter().any(|t| t == tool) => {
+            PolicyOutcome::deny(format!("tool {tool:?} was not offered to this agent"))
+        }
         _ => policy.evaluate(tool, arguments),
     };
     let (request, decision) =

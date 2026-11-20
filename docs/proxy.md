@@ -121,6 +121,7 @@ In `observe` mode the same session is forwarded unchanged; the decision is recor
 |---|---|---|
 | `observe` (default) | forwarded; decision recorded as `allow` with `would_deny` | learning what an agent does, tuning the config |
 | `enforce` | answered with a tool error (`isError: true`); never sent to the server | protecting a session |
+| `ask` | rules 1 and 2: the user is asked (MCP elicitation); rules 3 to 5: as in `enforce` | a middle ground before `enforce` |
 
 A call is denied when:
 
@@ -128,7 +129,57 @@ A call is denied when:
    the lab and AT-003), or
 2. it is a privileged tool (outbound tools count as privileged) and lower-trust content from a
    taint source was returned earlier in the session, or
-3. its arguments carry a [canary token](canaries.md), whatever the tool.
+3. its arguments carry a [canary token](canaries.md), whatever the tool, or
+4. a [profile](#profiles-task-scoped-tools) is active and the tool is not in it, or
+5. the tool's definition changed since it was [pinned](#tool-pinning-rug-pulls-and-tool-poisoning).
+
+Rules 1 and 2 are heuristics about the session, so a human may overrule them in `ask` mode.
+Rules 3 to 5 are hard denials: no one is asked.
+
+### Ask mode
+
+In `ask` mode the proxy sends the client an `elicitation/create` request when rule 1 or 2
+denies a call. The question names the tool, the server, the reason and the (redacted,
+shortened) arguments, and asks for one yes/no field, `approve`. The trace is not locked while
+the user decides.
+
+| Answer | Result | `human_approval` |
+|---|---|---|
+| accept with `approve = true` | forwarded | `accepted` |
+| accept with `approve = false` or missing, decline | tool error | `declined` |
+| cancel | tool error | `cancelled` |
+| no answer within `ask_timeout_secs` (default 300) | tool error | `timeout` |
+| the client did not announce `elicitation` in `initialize` | tool error | `unsupported` |
+| the request failed (also on protocol `2026-07-28` and later, which forbids server-to-client requests) | tool error | `error` |
+
+The trace records two `tool_policy_decision` events for such a call: `ask` (with the reason),
+then `allow` or `deny` with `human_approval`, caused by the first. An approved call is executed
+from the second decision. So:
+
+- AT-004 reports refused calls as blocked, and does not report approved ones (an approval is
+  not a denial that failed);
+- AT-002 still reports an approved privileged call after untrusted content as `executed`, and
+  its description says that a human approved it.
+
+Clients without elicitation support cannot answer, so every call that would be asked is denied
+(fail closed). Use `enforce` mode with them, or a client that supports elicitation.
+
+### Profiles: task-scoped tools
+
+A profile lists the tools a task needs. Select one with `--profile NAME` or
+`$AGENT_TRACE_PROFILE`; an unknown name is an error.
+
+```toml
+[profiles.read-only]
+tools = ["get_*", "list_*", "search_*"]   # GitHub MCP read tools; `*` wildcards
+```
+
+With a profile active, in `enforce` and `ask` mode a tool outside it is hidden from `tools/list`
+and denied if called anyway (reason `tool "create_pull_request" is not allowed by profile
+"read-only"`). In `observe` mode everything is listed and forwarded, and such calls are recorded
+with `would_deny`. The connection event records the profile; the `tools/list` event records
+which tools were hidden (`hidden_by_profile`). In the GitHub example above, a session started
+with `--profile read-only` to look at issues has no way to open a pull request at all.
 
 ## Causality: session context, not causes
 
@@ -169,10 +220,14 @@ outbound = ["post_*"]     # tools that send data somewhere; destinations are che
 allow_destinations = ["hooks.corp.example", "*.corp.example"]  # `*.x` = subdomains of x
 
 [proxy]
-mode = "observe"          # or "enforce"; --mode overrides it
+mode = "observe"          # or "enforce" or "ask"; --mode overrides it
 taint_sources = ["*"]
 call_timeout_secs = 300   # --call-timeout overrides it
 pin_tools = true          # pin tool definitions per server (default); see below
+ask_timeout_secs = 300    # ask mode: how long to wait for the user's answer
+
+[profiles.read-only]      # select with --profile read-only or $AGENT_TRACE_PROFILE
+tools = ["get_*", "list_*", "search_*"]
 ```
 
 `analyze`, `import`, `export`, `explore` and `demo run` use the same `[policy]`, so a CI gate
@@ -194,7 +249,7 @@ The proxy pins what a server announces and notices when it changes:
   compared with their pins:
   - A tool whose definition differs from its pin is **never re-pinned automatically**. The
     proxy records `mcp-tool-definitions-changed` with the pinned and the current description and
-    both hashes, and AT-008 reports it (high). In `enforce` mode the tool is removed from
+    both hashes, and AT-008 reports it (high). In `enforce` and `ask` mode the tool is removed from
     `tools/list`, so the changed description never reaches the model, and its calls are
     denied (`BLOCKED by agent-trace proxy policy: the definition of tool … changed since it was
     pinned`). In `observe` mode it is forwarded and the denial recorded as `would_deny`.
@@ -276,15 +331,17 @@ BLOCKED by agent-trace proxy policy: privileged tool requested after lower-trust
 entered the session (from issues:get_issue)
 ```
 
-If the store fails, a proxy in `enforce` mode answers tool calls with an error instead of
-forwarding them unchecked (it cannot see the session's history); in `observe` mode it forwards
-and logs the error on stderr.
+If the store fails, a proxy in `enforce` or `ask` mode answers tool calls with an error instead
+of forwarding them unchecked (it cannot see the session's history); in `observe` mode it
+forwards and logs the error on stderr. An approval that cannot be recorded is not forwarded
+either.
 
 ## Command
 
 ```text
 agent-trace [--config PATH] [--data-dir PATH] [--database-url URL] proxy
-            [--name NAME] [--mode observe|enforce] [--call-timeout SECONDS]
+            [--name NAME] [--mode observe|enforce|ask] [--profile NAME]
+            [--call-timeout SECONDS]
             [--session KEY | --no-session]
             ( --url URL [--bearer-token-env VAR] [--header-env NAME=VAR]...
             | -- <server command> [args...] )
@@ -295,7 +352,7 @@ agent-trace [--config PATH] [--data-dir PATH] [--database-url URL] proxy
 - Execution mode `live`. A proxy's connection ends when the client disconnects or the proxy
   gets Ctrl-C or SIGTERM (`ended_by` on its `mcp-server-disconnected` event).
 - The trace records the client name and version; each connection records its server, endpoint,
-  transport, mode, taint sources and effective policy.
+  transport, mode, taint sources, effective policy and active profile.
 
 ## Limits in this version
 
@@ -313,6 +370,11 @@ agent-trace [--config PATH] [--data-dir PATH] [--database-url URL] proxy
 - **Forwarded, not recorded:** `resources/list`, `resources/templates/list`, `prompts/list`.
 - **Not forwarded:** resource subscriptions, list-changed notifications, logging, completions,
   and requests from the server to the client (sampling, elicitation, roots). The proxy announces
-  only what it forwards, so clients do not rely on the rest.
+  only what it forwards, so clients do not rely on the rest. The proxy's own approval questions
+  in `ask` mode are its only server-to-client requests.
+- **Ask mode needs a client with form elicitation** on a protocol version before `2026-07-28`;
+  otherwise questions fail closed. An approval covers one call; the proxy does not remember it.
+- **Profiles filter by tool name only.** A tool name inside the profile is allowed whatever
+  its arguments (rules 1 to 3 still apply).
 - Only the text of results is recorded; images and binary resource contents are counted, not
   stored.

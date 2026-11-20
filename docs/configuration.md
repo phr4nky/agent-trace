@@ -14,15 +14,19 @@ outbound = ["post_*"]
 allow_destinations = ["hooks.corp.example", "*.corp.example"]
 
 [proxy]                           # agent-trace proxy (see docs/proxy.md)
-mode = "observe"                  # or "enforce"
+mode = "observe"                  # or "enforce" or "ask"
 taint_sources = ["*"]
 call_timeout_secs = 300
 pin_tools = true                  # pin MCP tool definitions per server (see docs/proxy.md)
+ask_timeout_secs = 300            # ask mode: wait this long for the user's answer
 
 [hooks]                           # agent-trace hook (see docs/claude-code-hooks.md)
-mode = "observe"
+mode = "observe"                  # or "enforce" or "ask"
 taint_sources = ["WebFetch", "WebSearch", "mcp__*"]
 on_error = "allow"                # or "deny"
+
+[profiles.read-only]              # task profile: --profile read-only or $AGENT_TRACE_PROFILE
+tools = ["Read", "Grep", "Glob", "WebFetch", "mcp__github__get_*", "get_*", "list_*"]
 
 [redaction]                       # added to the built-in secret patterns
 patterns = [
@@ -70,6 +74,43 @@ env = "AGENT_TRACE_CANARY_AWS_DECOY"     # or: value = "AKIA…"
   `--config`, or `env`. `agent-trace canary new NAME` prints a fresh decoy and its entry.
 - Canary values are replaced with `[REDACTED:canary]` everywhere; tool calls that carry one are
   reported as AT-007 and denied by the policy gate. Details: [canaries.md](canaries.md).
+
+## Modes: `observe`, `enforce`, `ask`
+
+`[proxy] mode` and `[hooks] mode` (or `--mode`) decide what a denial does:
+
+- `observe`: nothing is blocked; the decision is recorded as `allow` with `"would_deny": true`.
+- `enforce`: the call is denied.
+- `ask`: denials that come from the session heuristics (a privileged call after untrusted
+  content, an outbound destination that is not allowlisted) are put to a human: Claude Code
+  asks the user (`permissionDecision = "ask"`), the proxy asks through MCP elicitation and
+  denies if the client cannot ask or the user does not approve. Hard denials (a canary token,
+  a tool outside the active profile) are denied as in `enforce`.
+
+## `[profiles.<name>]`
+
+- `tools`: the tool names or `*` patterns the task may use (at least one). Matching is
+  case-sensitive, as for `[policy]`. Proxy tool names are the server's (`get_issue`); Claude
+  Code names MCP tools `mcp__<server>__<tool>`.
+- Select a profile with `--profile NAME` on `proxy` and `hook`, or with `$AGENT_TRACE_PROFILE`
+  (the flag wins). A name that is not defined is an error; nothing is selected silently.
+- With a profile active, any other tool is denied in `enforce` and `ask` mode (never asked
+  about) and recorded with `would_deny` in `observe` mode. The proxy also hides such tools
+  from `tools/list` in `enforce` and `ask` mode. The trace records the active profile.
+- A profile only narrows: the policy rules (taint, destinations, canaries) still apply to the
+  tools it allows.
+
+A read-only profile for a task that only needs to look around, for Claude Code's built-in tools
+and the GitHub MCP server (through the hooks and through the proxy):
+
+```toml
+[profiles.read-only]
+tools = [
+  "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "TodoWrite", "Task",
+  "mcp__github__get_*", "mcp__github__list_*", "mcp__github__search_*",   # hooks
+  "get_*", "list_*", "search_*",                                          # proxy
+]
+```
 
 ## `[retention]` and `agent-trace prune`
 

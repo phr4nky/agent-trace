@@ -10,6 +10,28 @@ The section of a version is used as the release notes of its GitHub release.
 
 ### Added
 
+- **Ask mode** (`--mode ask`, `mode = "ask"` in `[proxy]` and `[hooks]`): a middle ground
+  between observe and enforce. Calls denied by a session heuristic (a privileged call after
+  untrusted content, an outbound destination that is not allowlisted) are put to a human
+  instead of blocked. The Claude Code hook answers PreToolUse with
+  `permissionDecision = "ask"` and records the decision as `ask`; a later PostToolUse shows
+  that the call ran (`after_ask` on its execution), and nothing is recorded as approved
+  otherwise. The MCP proxy asks through MCP elicitation (`elicitation/create`, a yes/no form)
+  and forwards only an approved call; a declined, cancelled or unanswered question, an error
+  and a client without elicitation support all deny the call (fail closed). The outcome is
+  recorded as a second policy decision with `human_approval`. AT-004 does not report approved
+  calls; AT-002 still reports them as executed and says that a human approved them. Canary
+  tokens stay a hard denial in ask mode. `[proxy] ask_timeout_secs` (default 300) limits the
+  wait.
+- **Task profiles** (`[profiles.<name>] tools = [...]`, selected with `--profile NAME` on
+  `proxy` and `hook` or `$AGENT_TRACE_PROFILE`): only the listed tools (`*` wildcards) are
+  allowed. Other tools are denied in enforce and ask mode (never asked about) and recorded as
+  `would_deny` in observe mode; the proxy also hides them from `tools/list`. An unknown profile
+  name is an error. The active profile is recorded in the proxy's connection event, the hook
+  session's metadata and each decision.
+- `PolicyOutcome` has a `class` (`hard` or `askable`) that says whether a denial may be put to
+  a human; it is serialized only for askable denials, so existing JSON is unchanged.
+
 - **Rug-pull protection for MCP servers** (`agent-trace pins list|show|reset`, `[proxy]
   pin_tools`, on by default): the proxy pins every tool definition a server announces the first
   time (SHA-256 over the canonical JSON of name, title, description, schemas and annotations)

@@ -16,7 +16,10 @@ pub use event::{
     TraceRecord, TraceStatus, TrustLevel,
 };
 pub use finding::{AttemptStatus, Confidence, Finding, Severity};
-pub use policy::{Decision, PolicyConfig, PolicyOutcome, ToolPolicy, glob_match};
+pub use policy::{
+    Decision, DenialClass, PolicyConfig, PolicyOutcome, ProfileConfig, ToolPolicy, ToolProfile,
+    glob_match,
+};
 pub use provenance::{TraceIndex, ValidationError, validate};
 pub use recorder::{
     AccessError, EventSpec, MemoryTrace, RecorderEvent, TraceAccess, TraceRecorder,

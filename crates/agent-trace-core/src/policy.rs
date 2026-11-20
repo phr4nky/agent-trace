@@ -131,17 +131,120 @@ impl Default for ToolPolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Decision {
     Allow,
     Deny,
+    /// Ask a human before the call runs (ask mode). The policy itself never returns it;
+    /// the gate turns a [`DenialClass::Askable`] denial into it.
+    Ask,
+}
+
+/// What kind of denial a [`PolicyOutcome`] is. Only meaningful when the decision is
+/// [`Decision::Deny`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DenialClass {
+    /// Never turned into a question: a canary token in the arguments, a tool outside the
+    /// active profile.
+    #[default]
+    Hard,
+    /// A session heuristic a human may override in ask mode: a privileged call after
+    /// lower-trust content, an outbound destination that is not allowlisted.
+    Askable,
+}
+
+impl DenialClass {
+    pub fn is_hard(&self) -> bool {
+        *self == Self::Hard
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyOutcome {
     pub decision: Decision,
     pub reason: String,
+    /// Whether a denial may be put to a human. Not serialized for hard denials and allows,
+    /// so the JSON of existing outcomes is unchanged.
+    #[serde(default, skip_serializing_if = "DenialClass::is_hard")]
+    pub class: DenialClass,
+}
+
+impl PolicyOutcome {
+    pub fn allow(reason: impl Into<String>) -> Self {
+        Self {
+            decision: Decision::Allow,
+            reason: reason.into(),
+            class: DenialClass::Hard,
+        }
+    }
+
+    /// A denial no human can override.
+    pub fn deny(reason: impl Into<String>) -> Self {
+        Self {
+            decision: Decision::Deny,
+            reason: reason.into(),
+            class: DenialClass::Hard,
+        }
+    }
+
+    /// A denial that ask mode puts to a human.
+    pub fn askable(reason: impl Into<String>) -> Self {
+        Self {
+            decision: Decision::Deny,
+            reason: reason.into(),
+            class: DenialClass::Askable,
+        }
+    }
+
+    /// Whether this is a denial that ask mode may turn into a question.
+    pub fn is_askable(&self) -> bool {
+        self.decision == Decision::Deny && self.class == DenialClass::Askable
+    }
+}
+
+/// A task profile (`[profiles.<name>]` in `agent-trace.toml`): the tools a task may use.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileConfig {
+    /// Allowed tool names or patterns (`*` wildcards, see [`glob_match`]).
+    pub tools: Vec<String>,
+}
+
+/// The active task profile: a named allowlist of tools. A tool outside it is denied (hard).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolProfile {
+    pub name: String,
+    pub tools: Vec<String>,
+}
+
+impl ToolProfile {
+    pub fn new(name: impl Into<String>, config: &ProfileConfig) -> Self {
+        Self {
+            name: name.into(),
+            tools: config
+                .tools
+                .iter()
+                .map(|t| t.trim().to_owned())
+                .filter(|t| !t.is_empty())
+                .collect(),
+        }
+    }
+
+    pub fn allows(&self, tool: &str) -> bool {
+        self.tools.iter().any(|p| glob_match(p, tool))
+    }
+
+    /// The hard denial of `tool` if it is outside this profile.
+    pub fn denial(&self, tool: &str) -> Option<PolicyOutcome> {
+        (!self.allows(tool)).then(|| {
+            PolicyOutcome::deny(format!(
+                "tool {tool:?} is not allowed by profile {:?}",
+                self.name
+            ))
+        })
+    }
 }
 
 impl ToolPolicy {
@@ -231,30 +334,19 @@ impl ToolPolicy {
         }
         if self.is_outbound(tool) {
             if let Some(destination) = self.disallowed_destination(arguments) {
-                return PolicyOutcome {
-                    decision: Decision::Deny,
-                    reason: format!(
-                        "outbound destination host {:?} is not on the allowlist",
-                        host_of(&destination).unwrap_or_default()
-                    ),
-                };
+                return PolicyOutcome::askable(format!(
+                    "outbound destination host {:?} is not on the allowlist",
+                    host_of(&destination).unwrap_or_default()
+                ));
             }
-            return PolicyOutcome {
-                decision: Decision::Allow,
-                reason: "destination allowlisted".into(),
-            };
+            return PolicyOutcome::allow("destination allowlisted");
         }
         if self.is_privileged(tool) {
-            return PolicyOutcome {
-                decision: Decision::Allow,
-                reason: "privileged tool allowed (mock-only implementation in this environment)"
-                    .into(),
-            };
+            return PolicyOutcome::allow(
+                "privileged tool allowed (mock-only implementation in this environment)",
+            );
         }
-        PolicyOutcome {
-            decision: Decision::Allow,
-            reason: "read-only tool".into(),
-        }
+        PolicyOutcome::allow("read-only tool")
     }
 }
 
@@ -262,18 +354,31 @@ impl ToolPolicy {
     /// The verdict on a tool call in a recorded session, used by the MCP proxy and the
     /// Claude Code hooks. `tainted` names the sources of the lower-trust content that entered
     /// the session so far (oldest first). Denied: an outbound call to a destination that is
-    /// not allowlisted, and a privileged call after any tainted content.
+    /// not allowlisted and a privileged call after any tainted content (both
+    /// [`DenialClass::Askable`]), and a call carrying a canary token (hard).
     pub fn evaluate_in_session(
         &self,
         tool: &str,
         arguments: &Map<String, Value>,
         tainted: &[&str],
     ) -> PolicyOutcome {
-        let deny = |reason: String| PolicyOutcome {
-            decision: Decision::Deny,
-            reason,
-        };
+        self.evaluate_scoped(tool, arguments, tainted, None)
+    }
+
+    /// [`Self::evaluate_in_session`] within a task profile: a tool outside `profile` is a
+    /// hard denial. A canary token is reported first, as the stronger evidence.
+    pub fn evaluate_scoped(
+        &self,
+        tool: &str,
+        arguments: &Map<String, Value>,
+        tainted: &[&str],
+        profile: Option<&ToolProfile>,
+    ) -> PolicyOutcome {
+        let deny = PolicyOutcome::askable;
         if let Some(denied) = canary_denial(arguments) {
+            return denied;
+        }
+        if let Some(denied) = profile.and_then(|p| p.denial(tool)) {
             return denied;
         }
         if self.is_outbound(tool)
@@ -298,16 +403,13 @@ impl ToolPolicy {
                  (from {shown}{more})"
             ));
         }
-        PolicyOutcome {
-            decision: Decision::Allow,
-            reason: if self.is_outbound(tool) {
-                "destination allowlisted; no lower-trust content in the session".into()
-            } else if self.is_privileged(tool) {
-                "privileged tool; no lower-trust content in the session".into()
-            } else {
-                "not a privileged tool".into()
-            },
-        }
+        PolicyOutcome::allow(if self.is_outbound(tool) {
+            "destination allowlisted; no lower-trust content in the session"
+        } else if self.is_privileged(tool) {
+            "privileged tool; no lower-trust content in the session"
+        } else {
+            "not a privileged tool"
+        })
     }
 }
 
@@ -315,16 +417,15 @@ impl ToolPolicy {
 /// legitimate task uses a decoy secret, so the call can only be moving it somewhere.
 fn canary_denial(arguments: &Map<String, Value>) -> Option<PolicyOutcome> {
     let names = crate::canary::find_in_arguments(arguments);
-    (!names.is_empty()).then(|| PolicyOutcome {
-        decision: Decision::Deny,
-        reason: format!(
+    (!names.is_empty()).then(|| {
+        PolicyOutcome::deny(format!(
             "the arguments contain canary token {}: decoy secrets are never used by legitimate work",
             names
                 .iter()
                 .map(|n| format!("{n:?}"))
                 .collect::<Vec<_>>()
                 .join(", ")
-        ),
+        ))
     })
 }
 
@@ -602,6 +703,56 @@ mod tests {
             ..PolicyConfig::default()
         });
         assert!(!p.destination_allowed("https://marker.invalid/"));
+    }
+
+    #[test]
+    fn denials_are_classified() {
+        let p = ToolPolicy::default();
+        let args = json!({"destination": "https://marker.invalid/x"});
+        let args = args.as_object().unwrap();
+        let out = p.evaluate_in_session("send_webhook", args, &[]);
+        assert!(out.is_askable(), "destination allowlist: askable");
+        let out = p.evaluate_in_session("Bash", &Map::new(), &["WebFetch"]);
+        assert!(out.is_askable(), "session taint: askable");
+        let out = p.evaluate_in_session("Read", &Map::new(), &["WebFetch"]);
+        assert_eq!(out.decision, Decision::Allow);
+        assert!(!out.is_askable());
+        // Hard denials and allows serialize as before (no `class` key).
+        let json = serde_json::to_value(PolicyOutcome::deny("x")).unwrap();
+        assert_eq!(json, json!({"decision": "deny", "reason": "x"}));
+        let json = serde_json::to_value(PolicyOutcome::askable("x")).unwrap();
+        assert_eq!(json["class"], "askable");
+        let back: PolicyOutcome =
+            serde_json::from_value(json!({"decision": "deny", "reason": "x"})).unwrap();
+        assert_eq!(back.class, DenialClass::Hard);
+    }
+
+    #[test]
+    fn profiles_deny_other_tools_hard() {
+        let profile = ToolProfile::new(
+            "read-only",
+            &ProfileConfig {
+                tools: vec!["Read".into(), "mcp__github__get_*".into(), " ".into()],
+            },
+        );
+        assert_eq!(profile.tools.len(), 2);
+        let p = ToolPolicy::default();
+        let none = Map::new();
+        let out = p.evaluate_scoped("mcp__github__get_issue", &none, &[], Some(&profile));
+        assert_eq!(out.decision, Decision::Allow);
+        let out = p.evaluate_scoped("Write", &none, &["WebFetch"], Some(&profile));
+        assert_eq!(out.decision, Decision::Deny);
+        assert!(!out.is_askable());
+        assert!(
+            out.reason.contains("profile \"read-only\""),
+            "{}",
+            out.reason
+        );
+        // Without a profile the same call is an askable session denial.
+        assert!(
+            p.evaluate_scoped("Write", &none, &["WebFetch"], None)
+                .is_askable()
+        );
     }
 
     #[test]

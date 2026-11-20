@@ -393,8 +393,9 @@ agent-trace replay trace <trace-id>|--latest|--input FILE --provider P [--model 
 agent-trace replay suite FILE --provider P [--model M] [--system-prompt FILE] [--report PATH]
 agent-trace import --format jsonl|otlp --input PATH [--fail-on SEVERITY]
 agent-trace prune [--older-than AGE] [--keep N] [--dry-run]
-agent-trace hook [--mode observe|enforce] [--print-settings]
-agent-trace proxy [--name NAME] [--mode observe|enforce] [--session KEY | --no-session]
+agent-trace hook [--mode observe|enforce|ask] [--profile NAME] [--print-settings]
+agent-trace proxy [--name NAME] [--mode observe|enforce|ask] [--profile NAME]
+                  [--session KEY | --no-session]
                   ( --url URL [--bearer-token-env VAR] | -- <server command> [args...] )
 agent-trace --help
 ```
@@ -403,7 +404,7 @@ agent-trace --help
 |---|---|
 | `--data-dir PATH` | Where SQLite and exports live. The default is the per-user data dir (`~/Library/Application Support/agent-trace` on macOS, `~/.local/share/agent-trace` on Linux). Also settable via `AGENT_TRACE_DATA_DIR` |
 | `--database-url URL` | Use another database, see [Storage](#storage-sqlite-postgresql-mariadb-mysql). Also settable via `AGENT_TRACE_DATABASE_URL` |
-| `--config PATH` | Policy, proxy, hooks, redaction, retention and custom rules, see [docs/configuration.md](docs/configuration.md). Default: `AGENT_TRACE_CONFIG`, then `./agent-trace.toml`, then `agent-trace.toml` in the data dir |
+| `--config PATH` | Policy, proxy, hooks, profiles, redaction, retention and custom rules, see [docs/configuration.md](docs/configuration.md). Default: `AGENT_TRACE_CONFIG`, then `./agent-trace.toml`, then `agent-trace.toml` in the data dir |
 | `--no-color` | No ANSI colors. `NO_COLOR=1` works too |
 | `-v`, `-vv` | Diagnostic logs on stderr (redacted) |
 
@@ -702,6 +703,12 @@ injection of May 2025 needed: an issue in a public repository got an agent to pu
 repository content in a public pull request. (The tests replay this sequence against a
 simulated GitHub server, not the real one.)
 
+Between `observe` and `enforce` there is `ask` mode: instead of blocking such a call, the proxy
+asks the user through MCP elicitation and forwards it only if they approve; a client that
+cannot ask gets a tool error. A canary token is never asked about, always denied. A task
+profile (`--profile read-only`, defined in `[profiles.read-only]`) limits a session to the
+tools its task needs and hides the others from `tools/list`.
+
 Remote servers work too: `--url https://…` with the token taken from an environment variable
 (`--bearer-token-env`). All proxies one client starts write into **one trace**, so an
 injection that arrives through one server and a privileged call to another server are linked,
@@ -732,7 +739,10 @@ agent-trace --config ~/.config/agent-trace/claude-code.toml hook --print-setting
 Each session becomes one live trace. In `enforce` mode, a privileged call such as `Bash` or
 `Write` after untrusted content (by default: WebFetch, WebSearch and MCP tool results) is denied
 before it runs, also when the content reached the main agent through a subagent's report
-(AT-006). A recorder that fails never blocks Claude Code unless you configure it to. Details:
+(AT-006). In `ask` mode Claude Code asks you instead (`permissionDecision = "ask"`), and the
+trace shows whether the call then ran. With `AGENT_TRACE_PROFILE=read-only` (or
+`hook --profile read-only`) every tool outside the profile is denied. A recorder that fails
+never blocks Claude Code unless you configure it to. Details:
 [docs/claude-code-hooks.md](docs/claude-code-hooks.md).
 
 ---

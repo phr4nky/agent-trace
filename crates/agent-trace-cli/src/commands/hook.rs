@@ -2,8 +2,8 @@
 //!
 //! Each invocation is a new process: it reads the event from stdin and continues the
 //! session's trace through [`SharedTrace`] (which locks it, because parallel tool calls fire
-//! hooks concurrently), runs the rules and, for a denied PreToolUse call, prints Claude Code's deny decision on
-//! stdout. Nothing else is written to stdout.
+//! hooks concurrently), runs the rules and, for a denied or questioned PreToolUse call, prints
+//! Claude Code's `deny` or `ask` decision on stdout. Nothing else is written to stdout.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -39,18 +39,21 @@ const EVENTS: &[(&str, bool)] = &[
 
 pub struct HookArgs {
     pub mode: Option<ProxyMode>,
+    /// Task profile (`--profile`; else `$AGENT_TRACE_PROFILE`).
+    pub profile: Option<String>,
     pub print_settings: bool,
 }
 
 pub fn run(ctx: &Context, args: HookArgs) -> anyhow::Result<u8> {
     if args.print_settings {
-        return print_settings(ctx, args.mode);
+        return print_settings(ctx, args.mode, args.profile.as_deref());
     }
     let loaded = ctx.config()?;
     let section = &loaded.config.hooks;
     let mode = args.mode.or(section.mode).unwrap_or_default();
     let settings = HookSettings {
         mode,
+        profile: loaded.profile(args.profile.as_deref())?,
         policy: loaded.policy(),
         taint_sources: section.taint_sources.clone().unwrap_or_else(|| {
             DEFAULT_HOOK_TAINT_SOURCES
@@ -78,19 +81,19 @@ pub fn run(ctx: &Context, args: HookArgs) -> anyhow::Result<u8> {
         )),
     };
     match result {
-        Ok(HookOutput { deny: Some(reason) }) => {
+        Ok(HookOutput {
+            decision: Some((decision, reason)),
+        }) => {
             let decision = json!({"hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
+                "permissionDecision": decision.as_str(),
                 "permissionDecisionReason": reason,
             }});
             println!("{decision}");
             Ok(EXIT_OK)
         }
         Ok(_) => Ok(EXIT_OK),
-        Err(e)
-            if pre_tool_use && mode == ProxyMode::Enforce && section.on_error == OnError::Deny =>
-        {
+        Err(e) if pre_tool_use && mode.gates() && section.on_error == OnError::Deny => {
             // Fail closed: deny the call, with the error as the reason Claude sees.
             let redactor = agent_trace_core::Redactor::new();
             eprintln!(
@@ -134,7 +137,11 @@ fn record(
 }
 
 /// Print the `hooks` block for Claude Code's settings.json.
-fn print_settings(ctx: &Context, mode: Option<ProxyMode>) -> anyhow::Result<u8> {
+fn print_settings(
+    ctx: &Context,
+    mode: Option<ProxyMode>,
+    profile: Option<&str>,
+) -> anyhow::Result<u8> {
     let exe = std::env::current_exe().context("cannot locate own executable")?;
     let mut parts = vec![quote(&exe.display().to_string())];
     if let Some(config) = &ctx.config {
@@ -146,6 +153,12 @@ fn print_settings(ctx: &Context, mode: Option<ProxyMode>) -> anyhow::Result<u8> 
     if let Some(m) = mode {
         parts.push("--mode".into());
         parts.push(m.as_str().into());
+    }
+    if let Some(p) = profile {
+        // Fail here, not on every hook call, if the profile does not exist.
+        ctx.config()?.profile(Some(p))?;
+        parts.push("--profile".into());
+        parts.push(quote(p));
     }
     let command = parts.join(" ");
     let mut hooks = serde_json::Map::new();
