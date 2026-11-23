@@ -8,6 +8,13 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Team UI: a node picked in the causal graph jumped back to the first node within a few seconds.
+  The four-second refresh rebuilt the graph frame's address as a new object each time, so the
+  frame was reloaded even when the trace had not changed. It is now reloaded only when its
+  address changes, that is when a running trace has new events.
+
 ## [1.6.0] - 2026-11-20
 
 A team server with a web UI that collects the traces of many machines and shows each with its

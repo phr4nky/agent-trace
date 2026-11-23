@@ -74,9 +74,17 @@ export class App {
   protected readonly selected = computed(
     () => this.traces().find((t) => t.trace_id === this.selectedId()) ?? null,
   );
-  protected readonly graphUrl = computed<SafeResourceUrl | null>(() => {
+  /**
+   * Address of the graph frame as a plain string: the periodic refresh replaces every trace
+   * object, but an unchanged string stops the signal here, so the frame is not reloaded (and
+   * the node the user picked in the graph stays selected).
+   */
+  private readonly graphPath = computed<string | null>(() => {
     const trace = this.selected();
-    const path = trace ? this.api.graphPath(trace) : null;
+    return trace ? this.api.graphPath(trace) : null;
+  });
+  protected readonly graphUrl = computed<SafeResourceUrl | null>(() => {
+    const path = this.graphPath();
     // Built from a checked trace ID on our own origin; the page runs in a sandboxed frame.
     return path ? this.sanitizer.bypassSecurityTrustResourceUrl(path) : null;
   });
