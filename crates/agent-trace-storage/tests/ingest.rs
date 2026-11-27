@@ -265,7 +265,7 @@ fn batches_that_do_not_continue_the_trace_are_refused() {
         Err(IngestError::Invalid(_))
     ));
     let foreign = IngestBatch {
-        trace: record.trace.clone(),
+        trace: record.trace,
         events: trace().events[2..3].to_vec(),
     };
     assert!(matches!(

@@ -101,7 +101,7 @@ impl Store {
                 let traces = row
                     .pop()
                     .ok_or_else(|| StorageError::Corrupt("short source row".into()))?
-                    .as_i64()? as u64;
+                    .as_u64()?;
                 Ok(SourceSummary {
                     source: source_from_row(row)?,
                     traces,

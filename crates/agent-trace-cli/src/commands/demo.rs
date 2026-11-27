@@ -68,7 +68,7 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
     };
     let llm_options = LlmRunOptions {
         max_turns: args.max_turns,
-        policy: policy.clone(),
+        policy,
         step_delay: args.step_delay,
         ..LlmRunOptions::default()
     };
@@ -143,7 +143,7 @@ pub fn run(ctx: &Context, args: DemoArgs) -> anyhow::Result<u8> {
         };
         produced.push((
             name.to_string(),
-            scenario.title.clone(),
+            scenario.title,
             result.map_err(|e| format!("{e:#}")),
         ));
     }

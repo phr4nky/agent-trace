@@ -8,12 +8,30 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+### Changed
+
+- Hex and percent-encoding are implemented once, in `agent_trace_core::encoding`, instead of
+  separately in the server tokens, the storage integrity chain, SARIF fingerprints, tool pins,
+  canaries, `ship` cursors and the config hash. The output is unchanged.
+- Stricter hex parsing for integrity public keys, signatures and checkpoint hashes: a value with
+  a `+` sign (accepted before because parsing went through `u8::from_str_radix`) is now refused.
+
 ### Fixed
 
 - Team UI: a node picked in the causal graph jumped back to the first node within a few seconds.
   The four-second refresh rebuilt the graph frame's address as a new object each time, so the
   frame was reloaded even when the trace had not changed. It is now reloaded only when its
   address changes, that is when a running trace has new events.
+- The storage layer no longer converts integers with plain `as` casts: an event sequence or
+  evidence position that does not fit a signed 64-bit SQL integer, or a negative count read back
+  from the database, is reported as a corrupt store instead of silently wrapping.
+- `cargo` no longer warns about the unused `description` in `[workspace.package]`; every crate
+  sets its own.
+- `cargo doc` builds without warnings: config tables (`[ship]`, `[[canaries]]`, `[retention]`),
+  placeholders such as `<trace id>` and example URLs in the CLI's doc comments are quoted as code,
+  so rustdoc no longer reads them as links or HTML tags.
+- Fixes for lints from clippy's pedantic group: redundant clones, `format!` in loops, closures
+  that only call a method.
 
 ## [1.6.0] - 2026-11-20
 

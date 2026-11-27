@@ -85,7 +85,7 @@ impl Canary {
                 "canary {name:?}: the value looks like a redaction placeholder"
             ));
         }
-        let encoded = percent_encode(value);
+        let encoded = crate::encoding::percent_encode(value, b"");
         Ok(Self {
             name: name.to_owned(),
             encoded: (encoded != value).then_some(encoded),
@@ -113,19 +113,6 @@ pub fn valid_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-_.".contains(c))
-}
-
-/// RFC 3986 percent-encoding of everything but unreserved characters.
-fn percent_encode(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for b in value.bytes() {
-        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
 }
 
 /// Resolve configured canaries, reading `env` values from the process environment.

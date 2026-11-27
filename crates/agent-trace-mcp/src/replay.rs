@@ -250,7 +250,10 @@ impl ReplayServer {
 
     /// The recorded call that answers `tool` with `arguments`.
     pub fn answer(&self, tool: &str, arguments: &Map<String, Value>) -> Option<RecordedCall> {
-        let mut used = self.used.lock().unwrap_or_else(|p| p.into_inner());
+        let mut used = self
+            .used
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let calls = &self.fixture.calls;
         let same_tool = |i: &usize| calls[*i].tool == tool;
         let exact = |i: &usize| same_tool(i) && calls[*i].arguments == *arguments;

@@ -6,6 +6,7 @@ use agent_trace_core::{
 };
 use std::borrow::Cow;
 use std::fmt;
+use std::fmt::Write as _;
 
 /// `println!` for command output on stdout that tolerates a closed pipe
 /// (`agent-trace ... | head`): output stops, the command finishes with its real exit code.
@@ -68,7 +69,7 @@ pub fn term_safe(text: &str) -> Cow<'_, str> {
     let mut out = String::with_capacity(text.len() + 8);
     for c in text.chars() {
         if needs_escape(c) {
-            out.push_str(&format!("\\u{{{:x}}}", c as u32));
+            let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
         } else {
             out.push(c);
         }

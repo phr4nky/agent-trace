@@ -144,7 +144,7 @@ impl Config {
     pub fn sha256(&self) -> anyhow::Result<String> {
         use sha2::Digest;
         let digest = sha2::Sha256::digest(self.canonical_json()?.as_bytes());
-        Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
+        Ok(agent_trace_core::encoding::hex(&digest))
     }
 }
 

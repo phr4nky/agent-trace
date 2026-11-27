@@ -147,7 +147,10 @@ async fn start_on(
     let config = ProxyConfig {
         mode,
         policy: policy(),
-        taint_sources: taint_sources.iter().map(|s| s.to_string()).collect(),
+        taint_sources: taint_sources
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
         ..ProxyConfig::new(name)
     };
     start_with(trace, config, ()).await
