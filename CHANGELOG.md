@@ -18,6 +18,10 @@ The section of a version is used as the release notes of its GitHub release.
 
 ### Fixed
 
+- Team UI: a node picked in the causal graph jumped back to the first node within a few seconds.
+  The four-second refresh rebuilt the graph frame's address as a new object each time, so the
+  frame was reloaded even when the trace had not changed. It is now reloaded only when its
+  address changes, that is when a running trace has new events.
 - The storage layer no longer converts integers with plain `as` casts: an event sequence or
   evidence position that does not fit a signed 64-bit SQL integer, or a negative count read back
   from the database, is reported as a corrupt store instead of silently wrapping.
