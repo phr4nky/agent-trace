@@ -10,6 +10,16 @@ The section of a version is used as the release notes of its GitHub release.
 
 ### Changed
 
+- Web UI: the API models live in `ui/src/app/models/` instead of the HTTP service. They are
+  read-only `type` aliases; trace status, execution mode and severity are typed as the values the
+  server sends (`'running' | 'completed' | 'aborted'`, …) instead of `string`, so the tag
+  mappings are checked by the compiler. The unit tests run on Vitest, now set explicitly as the
+  runner in `angular.json`.
+- Web UI: sources and traces are loaded with Angular's `httpResource` instead of `HttpClient`
+  subscriptions. The chosen source and trace are `linkedSignal`s that keep the user's choice while
+  it exists and otherwise fall back to the source in the address, the first source and the newest
+  trace. Pure helpers (tag colours, trace IDs and graph addresses) live in `ui/src/app/helpers/`
+  with their own tests; `api.ts` holds only the HTTP resources.
 - Hex and percent-encoding are implemented once, in `agent_trace_core::encoding`, instead of
   separately in the server tokens, the storage integrity chain, SARIF fingerprints, tool pins,
   canaries, `ship` cursors and the config hash. The output is unchanged.
@@ -22,6 +32,8 @@ The section of a version is used as the release notes of its GitHub release.
   The four-second refresh rebuilt the graph frame's address as a new object each time, so the
   frame was reloaded even when the trace had not changed. It is now reloaded only when its
   address changes, that is when a running trace has new events.
+- Web UI: a severity the UI does not know yet is shown as a neutral tag instead of the green
+  "clean" one.
 - The storage layer no longer converts integers with plain `as` casts: an event sequence or
   evidence position that does not fit a signed 64-bit SQL integer, or a negative count read back
   from the database, is reported as a corrupt store instead of silently wrapping.

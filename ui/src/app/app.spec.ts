@@ -2,44 +2,62 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 
-import { App, severityTag, statusTag } from './app';
-import { isTraceId } from './api';
-
-const SOURCE = {
-  source_id: '0b8e7c1e-6f1d-4d6e-9a43-2a1c7f1b3c4d',
-  name: 'laptop',
-  created_at: '2026-11-20T10:00:00Z',
-  last_seen_at: '2026-11-20T10:05:00Z',
-  last_ip: '127.0.0.1',
-  traces: 1,
-};
-
-const TRACE = {
-  trace_id: '2fd80407-4c89-5f64-bc7e-93536e96e8ca',
-  name: 'local-lab/exfil-attempt',
-  status: 'completed',
-  created_at: '2026-11-20T10:01:00Z',
-  execution_mode: 'simulated',
-  events: 13,
-  findings: 4,
-  max_severity: 'high',
-};
+import { App } from './app';
+import { SOURCE, TRACE } from './testing/fixtures';
+import { SourceSummary, TraceRow } from './models';
 
 describe('App', () => {
+  let http: HttpTestingController;
+
   beforeEach(async () => {
     await TestBed.configureTestingModule({
       imports: [App],
       providers: [provideHttpClient(), provideHttpClientTesting()],
     }).compileComponents();
+    http = TestBed.inject(HttpTestingController);
   });
+
+  afterEach(() => {
+    http.verify();
+    window.history.replaceState(null, '', '/');
+  });
+
+  /** Let the resources send their requests, then answer the one for `url` (and `source`). */
+  async function answer(
+    url: string,
+    body: object | null,
+    source?: string,
+    error = false,
+  ): Promise<void> {
+    await settle();
+    const req = http.expectOne(
+      (r) => r.url === url && (source === undefined || r.params.get('source') === source),
+    );
+    if (error) {
+      req.flush('down', { status: 502, statusText: 'Bad Gateway' });
+    } else {
+      req.flush(body);
+    }
+    await settle();
+  }
+
+  /**
+   * Let answered responses reach the resources (they are delivered asynchronously), then run
+   * effects and change detection, so the next requests are sent and the view is current.
+   */
+  async function settle(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve));
+    TestBed.tick();
+  }
+
+  function frameSrc(page: HTMLElement): string | null {
+    return page.querySelector('iframe.graph')?.getAttribute('src') ?? null;
+  }
 
   it('loads the sources, picks the first, lists its traces and shows the newest graph', async () => {
     const fixture = TestBed.createComponent(App);
-    const http = TestBed.inject(HttpTestingController);
-    http.expectOne('/api/v1/sources').flush([SOURCE]);
-    http
-      .expectOne((req) => req.url === '/api/v1/traces' && req.params.get('source') === SOURCE.source_id)
-      .flush([TRACE]);
+    await answer('/api/v1/sources', [SOURCE]);
+    await answer('/api/v1/traces', [TRACE], SOURCE.source_id);
     await fixture.whenStable();
     const page: HTMLElement = fixture.nativeElement;
     expect(page.textContent).toContain('agent-trace');
@@ -47,16 +65,15 @@ describe('App', () => {
     const frame = page.querySelector('iframe.graph') as HTMLIFrameElement;
     expect(frame).toBeTruthy();
     expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
-    expect(frame.getAttribute('src')).toBe(`/api/v1/traces/${TRACE.trace_id}/graph?v=13`);
+    expect(frameSrc(page)).toBe(`/api/v1/traces/${TRACE.trace_id}/graph?v=13`);
+    expect(window.location.search).toBe('?source=laptop');
     fixture.destroy();
   });
 
   it('keeps the graph frame when a refresh returns the same trace', async () => {
     const fixture = TestBed.createComponent(App);
-    const http = TestBed.inject(HttpTestingController);
-    const tracesReq = (req: { url: string }) => req.url === '/api/v1/traces';
-    http.expectOne('/api/v1/sources').flush([SOURCE]);
-    http.expectOne(tracesReq).flush([TRACE]);
+    await answer('/api/v1/sources', [SOURCE]);
+    await answer('/api/v1/traces', [TRACE], SOURCE.source_id);
     await fixture.whenStable();
     const page: HTMLElement = fixture.nativeElement;
     const frame = page.querySelector('iframe.graph') as HTMLIFrameElement;
@@ -77,16 +94,16 @@ describe('App', () => {
 
     // A periodic refresh: new objects with the same content.
     (fixture.componentInstance as unknown as { refresh(): void }).refresh();
-    http.expectOne('/api/v1/sources').flush([{ ...SOURCE }]);
-    http.expectOne(tracesReq).flush([{ ...TRACE }]);
+    await answer('/api/v1/sources', [{ ...SOURCE }]);
+    await answer('/api/v1/traces', [{ ...TRACE }], SOURCE.source_id);
     await fixture.whenStable();
     expect(page.querySelector('iframe.graph')).toBe(frame);
     expect(srcWrites).toBe(0);
 
     // A growing trace is drawn again.
     (fixture.componentInstance as unknown as { refresh(): void }).refresh();
-    http.expectOne('/api/v1/sources').flush([SOURCE]);
-    http.expectOne(tracesReq).flush([{ ...TRACE, events: 14 }]);
+    await answer('/api/v1/sources', [SOURCE]);
+    await answer('/api/v1/traces', [{ ...TRACE, events: 14 }], SOURCE.source_id);
     await fixture.whenStable();
     expect(srcWrites).toBe(1);
     expect(frame.getAttribute('src')).toBe(`/api/v1/traces/${TRACE.trace_id}/graph?v=14`);
@@ -96,42 +113,79 @@ describe('App', () => {
   it('chooses the source named in the address', async () => {
     window.history.replaceState(null, '', '?source=ci-runner');
     const fixture = TestBed.createComponent(App);
-    const http = TestBed.inject(HttpTestingController);
-    const ci = { ...SOURCE, source_id: '5a0c2d9e-1b3f-4e6a-8c7d-9e0f1a2b3c4d', name: 'ci-runner' };
-    http.expectOne('/api/v1/sources').flush([SOURCE, ci]);
-    http.expectOne((req) => req.params.get('source') === ci.source_id).flush([]);
+    const ci: SourceSummary = {
+      ...SOURCE,
+      source_id: '5a0c2d9e-1b3f-4e6a-8c7d-9e0f1a2b3c4d',
+      name: 'ci-runner',
+    };
+    await answer('/api/v1/sources', [SOURCE, ci]);
+    await answer('/api/v1/traces', [], ci.source_id);
     await fixture.whenStable();
     expect(window.location.search).toBe('?source=ci-runner');
-    window.history.replaceState(null, '', '/');
     fixture.destroy();
   });
 
   it('says so when the server cannot be reached', async () => {
     const fixture = TestBed.createComponent(App);
-    const http = TestBed.inject(HttpTestingController);
-    http.expectOne('/api/v1/sources').flush('down', { status: 502, statusText: 'Bad Gateway' });
+    await answer('/api/v1/sources', null, undefined, true);
     await fixture.whenStable();
     expect(fixture.nativeElement.textContent).toContain('Cannot reach agent-trace-server.');
     fixture.destroy();
   });
-});
 
-describe('tags and IDs', () => {
-  it('maps severities and statuses to tag colours', () => {
-    expect(severityTag('critical')).toBe('danger');
-    expect(severityTag('high')).toBe('danger');
-    expect(severityTag('medium')).toBe('warn');
-    expect(severityTag('low')).toBe('info');
-    expect(severityTag(null)).toBe('success');
-    expect(statusTag('completed')).toBe('success');
-    expect(statusTag('running')).toBe('info');
-    expect(statusTag('aborted')).toBe('warn');
+  it('keeps the traces on screen when a refresh fails, and drops the error once it works again', async () => {
+    const fixture = TestBed.createComponent(App);
+    await answer('/api/v1/sources', [SOURCE]);
+    await answer('/api/v1/traces', [TRACE], SOURCE.source_id);
+    await fixture.whenStable();
+
+    const view = fixture.componentInstance as unknown as { refresh(): void };
+    view.refresh();
+    await answer('/api/v1/sources', null, undefined, true);
+    await answer('/api/v1/traces', null, SOURCE.source_id, true);
+    await fixture.whenStable();
+    const page: HTMLElement = fixture.nativeElement;
+    expect(page.textContent).toContain('Cannot reach agent-trace-server.');
+    expect(page.textContent).toContain('local-lab/exfil-attempt');
+    expect(frameSrc(page)).toBe(`/api/v1/traces/${TRACE.trace_id}/graph?v=13`);
+
+    view.refresh();
+    await answer('/api/v1/sources', [SOURCE]);
+    await answer('/api/v1/traces', [{ ...TRACE, events: 14 }], SOURCE.source_id);
+    await fixture.whenStable();
+    expect(page.textContent).not.toContain('Cannot reach agent-trace-server.');
+    expect(frameSrc(page)).toBe(`/api/v1/traces/${TRACE.trace_id}/graph?v=14`);
+    fixture.destroy();
   });
 
-  it('accepts only well-formed trace IDs for frame addresses', () => {
-    expect(isTraceId(TRACE.trace_id)).toBe(true);
-    for (const bad of ['', 'x', '../../etc', `${TRACE.trace_id}/../x`, 'javascript:alert(1)']) {
-      expect(isTraceId(bad)).toBe(false);
-    }
+  it('starts empty for a newly chosen source and selects its newest trace', async () => {
+    const fixture = TestBed.createComponent(App);
+    const ci: SourceSummary = {
+      ...SOURCE,
+      source_id: '5a0c2d9e-1b3f-4e6a-8c7d-9e0f1a2b3c4d',
+      name: 'ci-runner',
+    };
+    const ciTrace: TraceRow = {
+      ...TRACE,
+      trace_id: '7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f',
+      name: 'ci/nightly',
+    };
+    await answer('/api/v1/sources', [SOURCE, ci]);
+    await answer('/api/v1/traces', [TRACE], SOURCE.source_id);
+    await fixture.whenStable();
+
+    const view = fixture.componentInstance as unknown as { selectSource(id: unknown): void };
+    view.selectSource(ci.source_id);
+    await settle(); // its traces are still on the way
+    const page: HTMLElement = fixture.nativeElement;
+    expect(page.textContent).not.toContain('local-lab/exfil-attempt');
+    expect(frameSrc(page)).toBeNull();
+
+    await answer('/api/v1/traces', [ciTrace], ci.source_id);
+    await fixture.whenStable();
+    expect(page.textContent).toContain('ci/nightly');
+    expect(frameSrc(page)).toBe(`/api/v1/traces/${ciTrace.trace_id}/graph?v=13`);
+    expect(window.location.search).toBe('?source=ci-runner');
+    fixture.destroy();
   });
 });
