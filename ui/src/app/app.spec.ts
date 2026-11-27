@@ -70,6 +70,46 @@ describe('App', () => {
     fixture.destroy();
   });
 
+  it('keeps the graph frame when a refresh returns the same trace', async () => {
+    const fixture = TestBed.createComponent(App);
+    await answer('/api/v1/sources', [SOURCE]);
+    await answer('/api/v1/traces', [TRACE], SOURCE.source_id);
+    await fixture.whenStable();
+    const page: HTMLElement = fixture.nativeElement;
+    const frame = page.querySelector('iframe.graph') as HTMLIFrameElement;
+    let srcWrites = 0;
+    const setAttribute = frame.setAttribute.bind(frame);
+    frame.setAttribute = (name: string, value: string) => {
+      if (name === 'src') srcWrites++;
+      setAttribute(name, value);
+    };
+    const srcProp = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src')!;
+    Object.defineProperty(frame, 'src', {
+      get: () => srcProp.get!.call(frame),
+      set: (value: string) => {
+        srcWrites++;
+        srcProp.set!.call(frame, value);
+      },
+    });
+
+    // A periodic refresh: new objects with the same content.
+    (fixture.componentInstance as unknown as { refresh(): void }).refresh();
+    await answer('/api/v1/sources', [{ ...SOURCE }]);
+    await answer('/api/v1/traces', [{ ...TRACE }], SOURCE.source_id);
+    await fixture.whenStable();
+    expect(page.querySelector('iframe.graph')).toBe(frame);
+    expect(srcWrites).toBe(0);
+
+    // A growing trace is drawn again.
+    (fixture.componentInstance as unknown as { refresh(): void }).refresh();
+    await answer('/api/v1/sources', [SOURCE]);
+    await answer('/api/v1/traces', [{ ...TRACE, events: 14 }], SOURCE.source_id);
+    await fixture.whenStable();
+    expect(srcWrites).toBe(1);
+    expect(frame.getAttribute('src')).toBe(`/api/v1/traces/${TRACE.trace_id}/graph?v=14`);
+    fixture.destroy();
+  });
+
   it('chooses the source named in the address', async () => {
     window.history.replaceState(null, '', '?source=ci-runner');
     const fixture = TestBed.createComponent(App);

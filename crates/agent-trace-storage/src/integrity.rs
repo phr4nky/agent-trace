@@ -14,6 +14,7 @@
 
 use std::path::Path;
 
+use agent_trace_core::encoding::{hex, unhex};
 use ring::rand::SystemRandom;
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
@@ -26,21 +27,6 @@ use crate::{StorageError, create_private_file};
 pub const CHECKPOINT_EVERY: u64 = 256;
 const CHAIN_SEED: &[u8] = b"agent-trace-chain-v1";
 const SIGNATURE_CONTEXT: &str = "agent-trace-integrity-v1";
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn unhex(text: &str) -> Option<Vec<u8>> {
-    let text = text.trim();
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
-        .collect()
-}
 
 /// The running hash chain over the lines of a file.
 #[derive(Debug, Clone)]
@@ -430,7 +416,7 @@ mod tests {
         // The signature is bound to the trace id.
         assert!(record.verify(&c, Uuid::new_v4()).is_err());
         // A swapped public key fails the key id check or the signature.
-        let mut swapped = record.clone();
+        let mut swapped = record;
         swapped.signature.as_mut().unwrap().public_key = other.public_key();
         assert!(swapped.verify(&c, id).is_err());
     }

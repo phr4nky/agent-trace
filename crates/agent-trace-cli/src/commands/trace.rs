@@ -30,7 +30,9 @@ pub fn list(ctx: &Context) -> anyhow::Result<u8> {
             t.trace.status.as_str(),
             t.event_count,
             t.finding_count,
-            t.max_severity.map(|s| s.as_str()).unwrap_or("-"),
+            t.max_severity
+                .map(agent_trace_core::Severity::as_str)
+                .unwrap_or("-"),
             t.trace
                 .created_at
                 .format(&time::format_description::well_known::Rfc3339)
@@ -96,7 +98,9 @@ pub fn show(ctx: &Context, target: &TraceTarget, payload: bool) -> anyhow::Resul
             e.origin.as_str(),
             e.trust_level.as_str(),
             truncate(&term_safe(&e.name), 22),
-            e.tool_state.map(|t| t.as_str()).unwrap_or("-"),
+            e.tool_state
+                .map(agent_trace_core::ToolState::as_str)
+                .unwrap_or("-"),
             links(&record, e),
             s.event_marker(e),
         );

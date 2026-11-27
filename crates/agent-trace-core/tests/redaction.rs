@@ -60,7 +60,7 @@ fn prompts_arguments_and_responses_are_redacted() {
     let serialized = serde_json::to_string(&rec).unwrap();
     assert_clean(&serialized);
     assert!(rec.events.iter().all(|e| e.redaction_count() > 0));
-    assert!(rec.events.iter().all(|e| e.is_sensitive()));
+    assert!(rec.events.iter().all(agent_trace_core::Event::is_sensitive));
 }
 
 mod regressions {

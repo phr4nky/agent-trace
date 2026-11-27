@@ -21,6 +21,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use agent_trace_core::Redactor;
+use agent_trace_core::encoding::hex;
 use rmcp::model::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -74,12 +75,7 @@ pub fn fingerprint(tool: &Tool) -> String {
     let mut text = String::new();
     canonical(&definition, &mut text);
     let digest = Sha256::digest(text.as_bytes());
-    let mut hex = String::with_capacity(7 + 64);
-    hex.push_str("sha256:");
-    for b in digest {
-        hex.push_str(&format!("{b:02x}"));
-    }
-    hex
+    format!("sha256:{}", hex(&digest))
 }
 
 /// JSON with object keys sorted at every level, so equal definitions hash equally whatever
@@ -246,7 +242,7 @@ impl PinStore {
             format!("{safe}.json")
         } else {
             let digest = Sha256::digest(server.as_bytes());
-            let tag: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+            let tag = hex(&digest[..4]);
             format!("{}-{tag}.json", safe.trim_matches('.'))
         };
         self.dir.join(file)

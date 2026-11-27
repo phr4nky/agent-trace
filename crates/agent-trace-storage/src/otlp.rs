@@ -529,7 +529,7 @@ fn map_trace(mut spans: Vec<Span>) -> Result<OtlpTrace, StorageError> {
                             TrustLevel::Trusted,
                             agent_label(s),
                         )
-                        .agent(agent.clone())
+                        .agent(agent)
                         .parent(outer_event)
                         .caused_by(delegated),
                     ),
@@ -600,7 +600,7 @@ fn map_trace(mut spans: Vec<Span>) -> Result<OtlpTrace, StorageError> {
                             TrustLevel::Trusted,
                             agent_label(s),
                         )
-                        .agent(agent.clone())
+                        .agent(agent)
                         .parent(started.get(&i).copied().unwrap_or(main))
                         .caused_by(sent),
                     ),
@@ -659,7 +659,7 @@ fn map_trace(mut spans: Vec<Span>) -> Result<OtlpTrace, StorageError> {
                             "operation": s.str("gen_ai.operation.name"),
                             "messages": input.as_ref().and_then(Value::as_array).map(Vec::len),
                         }))
-                        .agent(agent.clone())
+                        .agent(agent)
                         .parent(parent_event)
                         .caused_by(cause)
                         .context(context),
@@ -694,7 +694,7 @@ fn map_trace(mut spans: Vec<Span>) -> Result<OtlpTrace, StorageError> {
                             },
                             "error": s.error,
                         }))
-                        .agent(agent.clone())
+                        .agent(agent)
                         .parent(parent_event)
                         .caused_by(model_request_of.get(&i).copied()),
                     ),
@@ -740,7 +740,7 @@ fn map_trace(mut spans: Vec<Span>) -> Result<OtlpTrace, StorageError> {
                             &tool,
                         )
                         .payload(json!({"tool": tool}))
-                        .agent(agent.clone())
+                        .agent(agent)
                         .parent(request)
                         .caused_by(request)
                         .tool_state(ToolState::Executed),
@@ -799,7 +799,7 @@ fn map_trace(mut spans: Vec<Span>) -> Result<OtlpTrace, StorageError> {
                     meta(
                         EventSpec::new(kind, Origin::System, TrustLevel::Trusted, &tool)
                             .payload(json!({"tool": tool, "is_error": s.error, "error_type": s.str("error.type")}))
-                            .agent(agent.clone())
+                            .agent(agent)
                             .parent(request)
                             .caused_by(id)
                             .tool_state(state),
@@ -821,7 +821,7 @@ fn map_trace(mut spans: Vec<Span>) -> Result<OtlpTrace, StorageError> {
             EventKind::AgentCompleted,
             Origin::System,
             TrustLevel::Trusted,
-            main_name.clone(),
+            main_name,
         )
         .parent(main),
     );

@@ -86,7 +86,10 @@ impl AppState {
     ) -> Result<T, ApiError> {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let mut store = inner.store.lock().unwrap_or_else(|p| p.into_inner());
+            let mut store = inner
+                .store
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             f(&mut store, &inner.analyzer)
         })
         .await

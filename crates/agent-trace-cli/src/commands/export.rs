@@ -62,7 +62,7 @@ pub fn run(
                     event_lines: None,
                 }],
                 &ctx.analyzer()?,
-            )?
+            )?;
         }
         (ExportFormat::Ocsf | ExportFormat::SplunkHec | ExportFormat::Elastic, None) => {
             unreachable!("SIEM formats map to a SiemFormat")

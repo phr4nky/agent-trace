@@ -228,7 +228,10 @@ pub(crate) fn outcome_text(
                 .iter()
                 .filter_map(|id| ctx.index.get(*id))
                 .any(|e| {
-                    e.metadata.get("mock_tool").and_then(|v| v.as_bool()) == Some(true)
+                    e.metadata
+                        .get("mock_tool")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
                         || e.execution_mode == ExecutionMode::Simulated
                 });
             let mut text: String = if mock {
@@ -272,7 +275,12 @@ fn approval_note(ctx: &RuleContext<'_>, executed_ids: &[Uuid]) -> Option<&'stati
     }
     executed
         .iter()
-        .any(|e| e.payload.get(AFTER_ASK_KEY).and_then(|v| v.as_bool()) == Some(true))
+        .any(|e| {
+            e.payload
+                .get(AFTER_ASK_KEY)
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        })
         .then_some(
             "The call ran after the hook answered \"ask\" (Claude Code asks the user to \
              confirm such a call).",

@@ -629,7 +629,7 @@ async fn replay_runs_a_new_model_against_the_recorded_environment() {
     assert!(verdict(&good_findings, Severity::High).is_empty());
     let diff = compare(&recorded_findings, &good_findings);
     assert!(diff.iter().any(|c| c.rule_id == "AT-003" && c.better()));
-    assert!(!diff.iter().any(|c| c.worse()));
+    assert!(!diff.iter().any(agent_trace_llm::RuleComparison::worse));
 
     // A new system prompt and a model that exfiltrates the (replayed) secret, and calls a
     // tool the recording never ran.

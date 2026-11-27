@@ -1,16 +1,13 @@
 //! Source tokens: `ats_` and 64 hex digits (32 random bytes). The server stores only the
 //! SHA-256 of a token; it is shown once, when the source is added.
 
+use agent_trace_core::encoding::hex;
 use axum::http::{HeaderMap, header};
 use ring::rand::{SecureRandom, SystemRandom};
 use sha2::{Digest, Sha256};
 
 /// Prefix of every source token (recognizable in logs and by secret scanners).
 pub const TOKEN_PREFIX: &str = "ats_";
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
 
 /// A new random token.
 pub fn generate() -> anyhow::Result<String> {

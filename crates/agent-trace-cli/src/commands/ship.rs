@@ -47,7 +47,7 @@ struct Sent {
 impl Cursor {
     fn path(data_dir: &Path, server: &str) -> PathBuf {
         let digest = Sha256::digest(server.as_bytes());
-        let tag: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
+        let tag = agent_trace_core::encoding::hex(&digest[..8]);
         data_dir.join("ship").join(format!("{tag}.json"))
     }
 
@@ -137,7 +137,7 @@ pub fn run(ctx: &Context, args: ShipArgs) -> anyhow::Result<u8> {
                 return Ok(if pass.failed > 0 { EXIT_ERROR } else { EXIT_OK });
             }
             tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(args.interval.max(1))) => {}
+                () = tokio::time::sleep(Duration::from_secs(args.interval.max(1))) => {}
                 _ = tokio::signal::ctrl_c() => return Ok(EXIT_OK),
             }
         }
