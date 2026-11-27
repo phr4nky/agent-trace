@@ -8,6 +8,24 @@ The section of a version is used as the release notes of its GitHub release.
 
 ## [Unreleased]
 
+### Changed
+
+- Web UI: the API models live in `ui/src/app/models/` instead of the HTTP service. They are
+  read-only `type` aliases; trace status, execution mode and severity are typed as the values the
+  server sends (`'running' | 'completed' | 'aborted'`, …) instead of `string`, so the tag
+  mappings are checked by the compiler. The unit tests run on Vitest, now set explicitly as the
+  runner in `angular.json`.
+- Web UI: sources and traces are loaded with Angular's `httpResource` instead of `HttpClient`
+  subscriptions. The chosen source and trace are `linkedSignal`s that keep the user's choice while
+  it exists and otherwise fall back to the source in the address, the first source and the newest
+  trace. Pure helpers (tag colours, trace IDs and graph addresses) live in `ui/src/app/helpers/`
+  with their own tests; `api.ts` holds only the HTTP resources.
+
+### Fixed
+
+- Web UI: a severity the UI does not know yet is shown as a neutral tag instead of the green
+  "clean" one.
+
 ## [1.6.0] - 2026-11-20
 
 A team server with a web UI that collects the traces of many machines and shows each with its
