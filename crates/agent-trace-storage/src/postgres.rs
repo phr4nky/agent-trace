@@ -22,7 +22,7 @@ pub struct PostgresBackend {
 fn all_targets_local(config: &Config) -> bool {
     let addrs = config.get_hostaddrs();
     if !addrs.is_empty() {
-        return addrs.iter().all(|a| a.is_loopback());
+        return addrs.iter().all(std::net::IpAddr::is_loopback);
     }
     config.get_hosts().iter().all(|h| match h {
         Host::Tcp(name) => is_loopback(name),

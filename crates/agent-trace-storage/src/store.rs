@@ -381,9 +381,9 @@ impl Store {
         Ok(rows
             .first()
             .and_then(|r| r.first())
-            .map(SqlValue::as_i64)
+            .map(SqlValue::as_u64)
             .transpose()?
-            .unwrap_or(0) as u64)
+            .unwrap_or(0))
     }
 
     fn trace_exists(&mut self, trace_id: Uuid) -> Result<bool, StorageError> {
@@ -430,13 +430,13 @@ impl Store {
             &[
                 e.trace_id.to_string().into(),
                 e.event_id.to_string().into(),
-                (e.sequence as i64).into(),
+                SqlValue::try_from(e.sequence)?,
                 fmt_time(e.timestamp)?.into(),
                 e.kind.as_str().into(),
                 e.origin.as_str().into(),
                 e.trust_level.as_str().into(),
                 column_text(&e.name).into(),
-                e.tool_state.map(|t| t.as_str()).into(),
+                e.tool_state.map(agent_trace_core::ToolState::as_str).into(),
                 e.parent_event_id.map(|u| u.to_string()).into(),
                 e.caused_by_event_id.map(|u| u.to_string()).into(),
                 e.execution_mode.as_str().into(),
@@ -628,7 +628,7 @@ impl Store {
                         "INSERT INTO evidence_links (finding_id, pos, event_id) VALUES (?, ?, ?)",
                         &[
                             f.finding_id.to_string().into(),
-                            (pos as i64).into(),
+                            SqlValue::try_from(pos)?,
                             event_id.to_string().into(),
                         ],
                     )?;
@@ -671,8 +671,8 @@ fn summary_from_row(row: Vec<SqlValue>) -> Result<TraceSummary, StorageError> {
     let created_order = next()?.as_i64()?;
     let trace: Trace = serde_json::from_str(&next()?.into_string()?)?;
     let source = next()?.into_string()?;
-    let event_count = next()?.as_i64()? as u64;
-    let finding_count = next()?.as_i64()? as u64;
+    let event_count = next()?.as_u64()?;
+    let finding_count = next()?.as_u64()?;
     let max_severity = next()?.as_opt_i64()?.and_then(severity_from_rank);
     Ok(TraceSummary {
         created_order,

@@ -129,7 +129,10 @@ impl MemoryTrace {
 
     /// The trace as recorded so far.
     pub fn snapshot(&self) -> TraceRecord {
-        let rec = self.rec.lock().unwrap_or_else(|p| p.into_inner());
+        let rec = self
+            .rec
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         TraceRecord {
             trace: rec.trace().clone(),
             events: rec.events().to_vec(),
@@ -141,12 +144,15 @@ impl TraceAccess for MemoryTrace {
     fn trace_id(&self) -> Uuid {
         self.rec
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .trace_id()
     }
 
     fn with_recorder(&self, f: &mut dyn FnMut(&mut TraceRecorder)) -> Result<(), AccessError> {
-        f(&mut self.rec.lock().unwrap_or_else(|p| p.into_inner()));
+        f(&mut self
+            .rec
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner));
         Ok(())
     }
 }

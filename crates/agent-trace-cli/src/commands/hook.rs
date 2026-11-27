@@ -67,7 +67,7 @@ pub fn run(ctx: &Context, args: HookArgs) -> anyhow::Result<u8> {
             taint_sources: section.taint_sources.clone().unwrap_or_else(|| {
                 DEFAULT_HOOK_TAINT_SOURCES
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect()
             }),
         };
@@ -178,7 +178,7 @@ fn record(
         move || {
             created
                 .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
                 .expect("a trace is created at most once per hook call")
         },

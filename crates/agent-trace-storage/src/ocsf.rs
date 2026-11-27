@@ -426,7 +426,7 @@ fn finding_event(redactor: &Redactor, record: &TraceRecord, f: &Finding) -> Valu
         "evidence_event_ids": f
             .evidence_event_ids
             .iter()
-            .map(|id| id.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>(),
     });
     if !f.tags.is_empty() {
@@ -532,13 +532,13 @@ fn event_event(record: &TraceRecord, e: &Event) -> Result<Value, StorageError> {
             "origin": e.origin.as_str(),
             "trust_level": e.trust_level.as_str(),
             "agent_id": e.agent(),
-            "tool_state": e.tool_state.map(|s| s.as_str()),
+            "tool_state": e.tool_state.map(agent_trace_core::ToolState::as_str),
             "parent_event_id": e.parent_event_id.map(|id| id.to_string()),
             "caused_by_event_id": e.caused_by_event_id.map(|id| id.to_string()),
             "context_event_ids": e
                 .context_event_ids
                 .iter()
-                .map(|id| id.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>(),
         }),
     );
