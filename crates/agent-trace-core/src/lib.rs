@@ -3,6 +3,7 @@
 //! This crate is intentionally independent of AI vendors, MCP SDKs and UIs.
 
 pub mod canary;
+pub mod encoding;
 pub mod event;
 pub mod finding;
 pub mod policy;

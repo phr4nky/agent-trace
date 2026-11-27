@@ -73,7 +73,7 @@ impl App {
         if len == 0 {
             return;
         }
-        *idx = (*idx as isize + delta).clamp(0, len as isize - 1) as usize;
+        *idx = idx.saturating_add_signed(delta).min(len - 1);
         self.sync_event_to_finding();
     }
 
@@ -232,7 +232,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             } else {
                 " "
             };
-            let state = e.tool_state.map(|s| s.as_str()).unwrap_or("");
+            let state = e
+                .tool_state
+                .map(agent_trace_core::ToolState::as_str)
+                .unwrap_or("");
             let agent = if multi {
                 Span::styled(
                     format!("{:<12} ", short(e.agent(), 12)),
@@ -392,7 +395,9 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
         )),
         Line::from(format!(
             "tool state : {}",
-            e.tool_state.map(|s| s.as_str()).unwrap_or("-")
+            e.tool_state
+                .map(agent_trace_core::ToolState::as_str)
+                .unwrap_or("-")
         )),
         Line::from(format!("agent      : {}", e.agent())),
         Line::from(format!("caused by  : {}", link(e.caused_by_event_id))),
@@ -633,7 +638,7 @@ mod tests {
         app.refresh(rec.clone(), findings.clone());
         assert_eq!(app.event_idx, 2, "selection follows the newest event");
         app.handle_key(KeyCode::Char('k'));
-        let mut more = rec.clone();
+        let mut more = rec;
         more.trace.status = TraceStatus::Completed;
         app.refresh(more, findings);
         assert_eq!(app.event_idx, 1, "manual selection is kept");
@@ -646,7 +651,11 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let text: String = buffer.content().iter().map(|c| c.symbol()).collect();
+        let text: String = buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
         assert!(text.contains("SIMULATED"));
         assert!(text.contains("AT-001"));
         assert!(text.contains("AT-004"));
@@ -671,7 +680,11 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(200, 50)).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let text: String = buffer.content().iter().map(|c| c.symbol()).collect();
+        let text: String = buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
         assert!(text.contains("LLM01:2025 Prompt Injection"), "{text}");
         assert!(text.contains("AML.T0051.001"));
     }

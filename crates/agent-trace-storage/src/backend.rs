@@ -25,6 +25,12 @@ impl SqlValue {
         }
     }
 
+    /// A non-negative integer, such as a count or a sequence number.
+    pub fn as_u64(&self) -> Result<u64, StorageError> {
+        let i = self.as_i64()?;
+        u64::try_from(i).map_err(|_| StorageError::Corrupt(format!("expected a count, got {i}")))
+    }
+
     pub fn as_opt_i64(&self) -> Result<Option<i64>, StorageError> {
         match self {
             Self::Null => Ok(None),
@@ -50,6 +56,25 @@ impl From<i64> for SqlValue {
 impl From<u32> for SqlValue {
     fn from(v: u32) -> Self {
         Self::Int(i64::from(v))
+    }
+}
+
+/// SQL integers are signed 64-bit; larger values are refused rather than wrapped.
+impl TryFrom<u64> for SqlValue {
+    type Error = StorageError;
+
+    fn try_from(v: u64) -> Result<Self, Self::Error> {
+        i64::try_from(v)
+            .map(Self::Int)
+            .map_err(|_| StorageError::Corrupt(format!("{v} does not fit an SQL integer")))
+    }
+}
+
+impl TryFrom<usize> for SqlValue {
+    type Error = StorageError;
+
+    fn try_from(v: usize) -> Result<Self, Self::Error> {
+        Self::try_from(v as u64)
     }
 }
 

@@ -23,15 +23,7 @@ pub fn artifact_uri(path: &Path) -> String {
         .unwrap_or_else(|| path.to_path_buf());
     let text = relative.to_string_lossy().replace('\\', "/");
     let text = text.strip_prefix("./").unwrap_or(&text);
-    let mut out = String::with_capacity(text.len());
-    for b in text.bytes() {
-        if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
+    agent_trace_core::encoding::percent_encode(text, b"/")
 }
 
 pub fn run(

@@ -138,7 +138,7 @@ pub fn explore(
                 store: &mut store,
                 latest: target.latest,
             });
-            crate::tui::run(record, findings, follow)?
+            crate::tui::run(record, findings, follow)?;
         }
     }
     Ok(EXIT_OK)

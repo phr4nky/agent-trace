@@ -467,7 +467,7 @@ impl Proxy {
             .inner
             .connection
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Run `f` with the recorder and this connection's event, under the trace's lock.
@@ -529,7 +529,7 @@ impl Proxy {
             .inner
             .connection
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         result.map_err(|e| anyhow::anyhow!("cannot record the end of the session: {e}"))
     }
 
@@ -598,7 +598,7 @@ impl Proxy {
         self.inner
             .pins
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Compare the server's tools with their pins once per connection, before the first call.

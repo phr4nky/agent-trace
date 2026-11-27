@@ -60,7 +60,7 @@ impl SharedTrace {
     pub fn load(&self) -> Result<TraceRecord, StorageError> {
         self.store
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .load_trace(self.trace_id)
     }
 
@@ -68,7 +68,7 @@ impl SharedTrace {
     pub fn findings(&self) -> Result<Vec<agent_trace_core::Finding>, StorageError> {
         self.store
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .load_findings(self.trace_id)
     }
 
@@ -88,7 +88,10 @@ impl SharedTrace {
     fn access(&self, f: &mut dyn FnMut(&mut TraceRecorder)) -> Result<(), StorageError> {
         // Released when dropped, after everything is written.
         let _lock = self.lock_file()?;
-        let mut store = self.store.lock().unwrap_or_else(|p| p.into_inner());
+        let mut store = self
+            .store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (mut rec, is_new) = match store.load_trace(self.trace_id) {
             Ok(record) => (TraceRecorder::resume(record), false),
             Err(StorageError::TraceNotFound(_)) => ((self.create)(), true),

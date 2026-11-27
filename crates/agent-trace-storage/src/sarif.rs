@@ -177,11 +177,7 @@ pub fn sarif_log(traces: &[SarifTrace<'_>], analyzer: &Analyzer) -> Value {
                 fingerprint.update(b":");
                 fingerprint.update(e.name.as_bytes());
             }
-            let fingerprint: String = fingerprint
-                .finalize()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
+            let fingerprint = agent_trace_core::encoding::hex(&fingerprint.finalize());
             let message = redactor.scrub(&format!(
                 "{} ({}, {} confidence). {}",
                 f.title,

@@ -109,7 +109,7 @@ enum Command {
     Graph {
         #[command(flatten)]
         target: TraceTarget,
-        /// Output file (default: graph-<trace id>.html in the exports directory).
+        /// Output file (default: `graph-<trace id>.html` in the exports directory).
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
     },
@@ -123,7 +123,7 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
         /// SARIF only: the trace's JSONL file in the repository, which alerts point to
-        /// (default: trace-<id>.jsonl, the layout `--format jsonl` writes).
+        /// (default: `trace-<id>.jsonl`, the layout `--format jsonl` writes).
         #[arg(long, value_name = "URI")]
         artifact_uri: Option<String>,
         /// OCSF, Splunk HEC and Elastic only: export every recorded event as well, not only
@@ -180,7 +180,7 @@ enum Command {
         output: Option<PathBuf>,
     },
     /// Canary tokens: decoy secrets whose use in a tool call is reported (AT-007) and, in
-    /// enforce mode, denied. Configure them with [[canaries]] in agent-trace.toml.
+    /// enforce mode, denied. Configure them with `[[canaries]]` in agent-trace.toml.
     Canary {
         #[command(subcommand)]
         command: CanaryCommand,
@@ -210,10 +210,10 @@ enum Command {
     },
     /// Send recorded traces to agent-trace-server (store and forward): what is new since the
     /// last run, or continuously with --follow. The token comes from $AGENT_TRACE_SHIP_TOKEN
-    /// (or the variable named by `token_env` in [ship]).
+    /// (or the variable named by `token_env` in `[ship]`).
     Ship {
-        /// Server URL, e.g. https://trace.example.com or http://localhost:8080 (default: `url`
-        /// in the [ship] table of agent-trace.toml).
+        /// Server URL, e.g. `https://trace.example.com` or `http://localhost:8080` (default: `url`
+        /// in the `[ship]` table of agent-trace.toml).
         #[arg(long, value_name = "URL")]
         to: Option<String>,
         /// Keep running and send new events as they are recorded (until Ctrl-C).
@@ -223,7 +223,7 @@ enum Command {
         #[arg(long, default_value_t = 2, value_name = "SECONDS")]
         interval: u64,
     },
-    /// Delete old traces (retention). Defaults come from [retention] in agent-trace.toml;
+    /// Delete old traces (retention). Defaults come from `[retention]` in agent-trace.toml;
     /// traces still being recorded are kept.
     Prune {
         /// Delete traces older than this: 30d, 12h, 90m (a plain number means days).
@@ -465,7 +465,7 @@ pub enum ProviderArg {
 
 #[derive(Debug, Subcommand)]
 enum CanaryCommand {
-    /// Print a fresh decoy value and its [[canaries]] entry (nothing is written).
+    /// Print a fresh decoy value and its `[[canaries]]` entry (nothing is written).
     New {
         /// Name shown in findings: lowercase letters, digits, `-`, `_`, `.`.
         name: String,
@@ -497,7 +497,7 @@ enum PinsCommand {
 enum KeysCommand {
     /// Create an Ed25519 signing key (never overwrites an existing key).
     Generate {
-        /// Key file (default: $AGENT_TRACE_SIGNING_KEY or <data dir>/keys/signing-key.pk8).
+        /// Key file (default: `$AGENT_TRACE_SIGNING_KEY` or `<data dir>/keys/signing-key.pk8`).
         #[arg(long, value_name = "PATH")]
         key: Option<PathBuf>,
     },
@@ -643,7 +643,7 @@ fn main() -> ExitCode {
             keep,
             dry_run,
         } => commands::prune::run(&ctx, older_than.as_deref(), keep, dry_run),
-        Command::LabServer { documents } => commands::lab_server(&documents).map(|_| EXIT_OK),
+        Command::LabServer { documents } => commands::lab_server(&documents).map(|()| EXIT_OK),
         Command::Hook {
             mode,
             profile,
